@@ -1,0 +1,84 @@
+{
+  "name": "@orangeofcarl0-sys/dsh-coursekeeper",
+  "version": "0.7.1",
+  "description": "Self-calibrating cognitive course control for DeepSeek Harness with an experimental native-canonical protocol-fidelity mode.",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./core": {
+      "types": "./lib/core.d.ts",
+      "default": "./lib/core.js"
+    },
+    "./state": {
+      "types": "./lib/state.d.ts",
+      "default": "./lib/state.js"
+    },
+    "./verifier": {
+      "types": "./lib/verifier.d.ts",
+      "default": "./lib/verifier.js"
+    },
+    "./package.json": "./package.json",
+    "./profiles": {
+      "types": "./lib/profiles.d.ts",
+      "default": "./lib/profiles.js"
+    },
+    "./adaptive": {
+      "types": "./lib/adaptive/index.d.ts",
+      "default": "./lib/adaptive/index.js"
+    }
+  },
+  "files": [
+    "lib",
+    "docs",
+    "cordis.patch.yml",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/orangeofcarl0-sys/dsh-coursekeeper.git"
+  },
+  "homepage": "https://github.com/orangeofcarl0-sys/dsh-coursekeeper#readme",
+  "bugs": {
+    "url": "https://github.com/orangeofcarl0-sys/dsh-coursekeeper/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-agent": ">=0.1.0-rc.5 <0.2.0",
+    "@deepseek-ai/dsh-llm": ">=0.1.0-rc.5 <0.2.0",
+    "@deepseek-ai/dsh-session": ">=0.1.0-rc.5 <0.2.0",
+    "@deepseek-ai/dsh-system-prompt": ">=0.1.0-rc.5 <0.2.0",
+    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.5 <0.2.0",
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test tests/*.test.mjs",
+    "check": "npm run build && npm test",
+    "pack:release": "npm run check && npm pack"
+  }
+}

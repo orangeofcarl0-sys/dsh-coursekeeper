@@ -1,0 +1,52 @@
+# DSH Coursekeeper v0.7.1 — self-calibrating closed-loop cognitive course control.
+- insert:
+    - id: coursekeeper
+      name: '@orangeofcarl0-sys/dsh-coursekeeper'
+      config:
+        mode: active
+        augmentationProfile: governor
+        jspaceAssist: off
+        routerAssist: off
+        semanticVerifier: risk
+        semanticVerifierMaxTokens: 1536
+        maxSemanticVerifierCalls: 2
+        capabilityControl: guard
+        adaptiveReasoning: off
+        adaptiveRouting: shadow
+        adaptiveEscalation: calibrated
+        routeChallenger: risk
+        routeChallengerMinRisk: medium
+        maxRouteChallengesPerEpisode: 1
+        experienceMemory: true
+        experienceMaxEntries: 5000
+        memoryTopK: 8
+        memoryMinSimilarity: 0.60
+        experienceHalfLifeDays: 90
+        bayesianCalibration: true
+        bayesianPriorStrength: 6
+        memoryWeight: 0.10
+        bayesianWeight: 0.10
+        maxAdaptiveAdjustment: 0.15
+        minEffectiveSupport: 3
+        routeMarginThreshold: 0.08
+        safeExplorationRate: 0
+        crossProfileWeight: 0.25
+        crossModelWeight: 0
+        stalePolicyWeight: 0.5
+        autoVerify: true
+        maxAutomaticContinuations: 1
+        noInformationLimit: 3
+        maxDynamicHintChars: 640
+        exposeStatusTool: true
+        exposeControlTool: true
+        exposeSemanticVerifierTool: true
+        ledger: true
+        maxLedgerBytes: 10485760
+        benchmarkRequired: false
+        benchmarkToolNames: [run_benchmark]
+        verificationToolNames: [build_project, run_correctness_test]
+        finishToolNames: [finish]
+        fullBenchmarkMinQueries: 10000
+        fullBenchmarkMinRecall: 0.95
+        benchmarkScoreTolerancePercent: 2
+        stopRetryOnDeterministicErrors: true

@@ -1,0 +1,1196 @@
+/**
+ * DSH Coursekeeper v0.7
+ *
+ * One control plane, four responsibilities:
+ *   Router     -> select the evidence-acquisition route.
+ *   Committer  -> keep that route until falsified or its evidence budget is satisfied.
+ *   Verifier   -> enforce acceptance/verification/benchmark obligations before completion.
+ *   Calibrator -> learn bounded personal route preferences from execution-grounded episodes.
+ *
+ * The plugin deliberately preserves the official system prompt, runtime contexts, and (in
+ * default guard mode) tool schemas. Model-visible steering is a tiny near-field control packet.
+ */
+import type { Context } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
+import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { defineTool } from '@deepseek-ai/dsh-tools'
+import type {} from '@deepseek-ai/dsh-system-prompt'
+import type {} from '@deepseek-ai/dsh-plan-mode'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import {
+  DEFAULT_BENCHMARK_TOOL_NAMES,
+  DEFAULT_FINISH_TOOL_NAMES,
+  DEFAULT_VERIFICATION_TOOL_NAMES,
+  COURSEKEEPER_CONTROL_TOOL,
+  COURSEKEEPER_STATUS_TOOL,
+  COURSEKEEPER_VERIFY_TOOL,
+  LEGACY_TRAJECTORY_CONTROL_TOOL,
+  LEGACY_TRAJECTORY_VERIFY_TOOL,
+  classifyTaskContract,
+  classifyTool,
+  fingerprint,
+  isTerminalLlmFailure,
+} from './core.js'
+import {
+  acceptHumanTask,
+  applyTrajectoryControl,
+  applyAdaptiveInitialRoute,
+  applyAdaptiveEscalation,
+  blockerReport,
+  completionBlockers,
+  createGovernorState,
+  currentControlPacket,
+  markHintInjected,
+  mutationGate,
+  rebuildStateFromEvents,
+  refreshPolicyHint,
+  registerToolCall,
+  settleToolCall,
+  verificationPrompt,
+} from './state.js'
+import type {
+  AdaptiveReasoningMode,
+  AugmentationProfile,
+  CapabilityControlMode,
+  GovernorMode,
+  GovernorState,
+  JSpaceAssistMode,
+  RouterAssistMode,
+  SemanticVerifierMode,
+  AdaptiveRoutingMode,
+  AdaptiveEscalationMode,
+  RouteChallengerMode,
+  RiskLevel,
+  CalibrationDomain,
+  TaskSignature,
+  RouteExperienceMetrics,
+  Route,
+} from './types.js'
+import {
+  applySemanticVerifierResult,
+  buildEvidencePacket,
+  parseSemanticVerifierResult,
+  verifierPrompt as semanticVerifierPrompt,
+} from './verifier.js'
+import { applyNativeCanonicalProfile, applyRouterAssist, jspaceAssistKernel, observeRequestProtocol } from './profiles.js'
+import { DecisionLedger } from './ledger.js'
+import {
+  ExperienceStore,
+  buildTaskSignature,
+  decideAdaptiveRoute,
+  suggestEscalation,
+  buildRouteExperience,
+  inferCompletion,
+  routeChallengerPrompt,
+  parseRouteChallenge,
+  withChallenge,
+} from './adaptive/index.js'
+
+export * from './core.js'
+export * from './debt.js'
+export * from './state.js'
+export * from './types.js'
+export * from './verifier.js'
+export * from './profiles.js'
+export * from './adaptive/index.js'
+
+export const name = 'coursekeeper'
+export const inject = ['agents', 'sessions', 'systemPrompt', 'tools', 'llm']
+
+export interface Config {
+  mode?: GovernorMode
+  augmentationProfile?: AugmentationProfile
+  jspaceAssist?: JSpaceAssistMode
+  routerAssist?: RouterAssistMode
+  semanticVerifier?: SemanticVerifierMode
+  semanticVerifierProvider?: string
+  semanticVerifierModel?: string
+  semanticVerifierMaxTokens?: number
+  maxSemanticVerifierCalls?: number
+  capabilityControl?: CapabilityControlMode
+  adaptiveReasoning?: AdaptiveReasoningMode | boolean
+  adaptiveRouting?: AdaptiveRoutingMode
+  adaptiveEscalation?: AdaptiveEscalationMode
+  routeChallenger?: RouteChallengerMode
+  routeChallengerMinRisk?: RiskLevel
+  maxRouteChallengesPerEpisode?: number
+  experienceMemory?: boolean
+  experiencePath?: string
+  experienceMaxEntries?: number
+  memoryTopK?: number
+  memoryMinSimilarity?: number
+  experienceHalfLifeDays?: number
+  bayesianCalibration?: boolean
+  bayesianPriorStrength?: number
+  memoryWeight?: number
+  bayesianWeight?: number
+  maxAdaptiveAdjustment?: number
+  minEffectiveSupport?: number
+  routeMarginThreshold?: number
+  safeExplorationRate?: number
+  crossProfileWeight?: number
+  crossModelWeight?: number
+  stalePolicyWeight?: number
+  harnessVersion?: string
+  modelRevision?: string
+  autoVerify?: boolean
+  maxAutomaticContinuations?: number
+  noInformationLimit?: number
+  maxDynamicHintChars?: number
+  exposeStatusTool?: boolean
+  exposeControlTool?: boolean
+  exposeSemanticVerifierTool?: boolean
+  ledger?: boolean
+  ledgerPath?: string
+  maxLedgerBytes?: number
+  benchmarkRequired?: boolean
+  benchmarkToolNames?: string[]
+  verificationToolNames?: string[]
+  finishToolNames?: string[]
+  fullBenchmarkMinQueries?: number
+  fullBenchmarkMinRecall?: number
+  benchmarkScoreTolerancePercent?: number
+  stopRetryOnDeterministicErrors?: boolean
+  maxTrackedResults?: number
+}
+
+export const Config: any = z.object({
+  mode: z.union(['off', 'shadow', 'active'] as const).default('active'),
+  augmentationProfile: z.union(['governor', 'jspace-assist', 'router-assist', 'hybrid-assist', 'native-canonical'] as const).default('governor'),
+  jspaceAssist: z.union(['off', 'lite', 'legacy'] as const).default('off'),
+  routerAssist: z.union(['off', 'minimal-first', 'task-aware'] as const).default('off'),
+  semanticVerifier: z.union(['off', 'risk', 'always'] as const).default('risk'),
+  semanticVerifierProvider: z.string(),
+  semanticVerifierModel: z.string(),
+  semanticVerifierMaxTokens: z.natural().min(128).default(1536),
+  maxSemanticVerifierCalls: z.natural().min(1).default(2),
+  capabilityControl: z.union(['advisory', 'guard', 'restrict'] as const).default('guard'),
+  adaptiveReasoning: z.union(['off', 'episode', 'phase'] as const).default('off'),
+  adaptiveRouting: z.union(['off', 'shadow', 'active'] as const).default('shadow'),
+  adaptiveEscalation: z.union(['off', 'rules', 'calibrated'] as const).default('calibrated'),
+  routeChallenger: z.union(['off', 'risk'] as const).default('risk'),
+  routeChallengerMinRisk: z.union(['low', 'medium', 'high'] as const).default('medium'),
+  maxRouteChallengesPerEpisode: z.natural().min(1).default(1),
+  experienceMemory: z.boolean().default(true),
+  experiencePath: z.string(),
+  experienceMaxEntries: z.natural().min(16).default(5000),
+  memoryTopK: z.natural().min(1).default(8),
+  memoryMinSimilarity: z.number().min(0).max(1).default(0.60),
+  experienceHalfLifeDays: z.number().min(1).default(90),
+  bayesianCalibration: z.boolean().default(true),
+  bayesianPriorStrength: z.number().min(1).default(6),
+  memoryWeight: z.number().min(0).max(1).default(0.10),
+  bayesianWeight: z.number().min(0).max(1).default(0.10),
+  maxAdaptiveAdjustment: z.number().min(0).max(1).default(0.15),
+  minEffectiveSupport: z.number().min(0).default(3),
+  routeMarginThreshold: z.number().min(0).default(0.08),
+  safeExplorationRate: z.number().min(0).max(1).default(0),
+  crossProfileWeight: z.number().min(0).max(1).default(0.25),
+  crossModelWeight: z.number().min(0).max(1).default(0),
+  stalePolicyWeight: z.number().min(0).max(1).default(0.5),
+  harnessVersion: z.string(),
+  modelRevision: z.string(),
+  autoVerify: z.boolean().default(true),
+  maxAutomaticContinuations: z.natural().default(1),
+  noInformationLimit: z.natural().min(2).default(3),
+  maxDynamicHintChars: z.natural().min(160).default(640),
+  exposeStatusTool: z.boolean().default(true),
+  exposeControlTool: z.boolean().default(true),
+  exposeSemanticVerifierTool: z.boolean().default(true),
+  ledger: z.boolean().default(true),
+  ledgerPath: z.string(),
+  maxLedgerBytes: z.natural().min(1024).default(10 * 1024 * 1024),
+  benchmarkRequired: z.boolean().default(false),
+  benchmarkToolNames: z.array(z.string()).default([...DEFAULT_BENCHMARK_TOOL_NAMES]),
+  verificationToolNames: z.array(z.string()).default([...DEFAULT_VERIFICATION_TOOL_NAMES]),
+  finishToolNames: z.array(z.string()).default([...DEFAULT_FINISH_TOOL_NAMES]),
+  fullBenchmarkMinQueries: z.natural().min(1).default(10_000),
+  fullBenchmarkMinRecall: z.number().min(0).max(1).default(0.95),
+  benchmarkScoreTolerancePercent: z.number().min(0).max(100).default(2),
+  stopRetryOnDeterministicErrors: z.boolean().default(true),
+  maxTrackedResults: z.natural().min(8).default(256),
+})
+
+interface ResolvedConfig {
+  mode: GovernorMode
+  augmentationProfile: AugmentationProfile
+  jspaceAssist: JSpaceAssistMode
+  routerAssist: RouterAssistMode
+  semanticVerifier: SemanticVerifierMode
+  semanticVerifierProvider?: string
+  semanticVerifierModel?: string
+  semanticVerifierMaxTokens: number
+  maxSemanticVerifierCalls: number
+  capabilityControl: CapabilityControlMode
+  adaptiveReasoning: AdaptiveReasoningMode
+  adaptiveRouting: AdaptiveRoutingMode
+  adaptiveEscalation: AdaptiveEscalationMode
+  routeChallenger: RouteChallengerMode
+  routeChallengerMinRisk: RiskLevel
+  maxRouteChallengesPerEpisode: number
+  experienceMemory: boolean
+  experiencePath: string
+  experienceMaxEntries: number
+  memoryTopK: number
+  memoryMinSimilarity: number
+  experienceHalfLifeDays: number
+  bayesianCalibration: boolean
+  bayesianPriorStrength: number
+  memoryWeight: number
+  bayesianWeight: number
+  maxAdaptiveAdjustment: number
+  minEffectiveSupport: number
+  routeMarginThreshold: number
+  safeExplorationRate: number
+  crossProfileWeight: number
+  crossModelWeight: number
+  stalePolicyWeight: number
+  harnessVersion: string
+  modelRevision: string
+  autoVerify: boolean
+  maxAutomaticContinuations: number
+  noInformationLimit: number
+  maxDynamicHintChars: number
+  exposeStatusTool: boolean
+  exposeControlTool: boolean
+  exposeSemanticVerifierTool: boolean
+  ledger: boolean
+  ledgerPath: string
+  maxLedgerBytes: number
+  benchmarkRequired: boolean
+  benchmarkToolNames: string[]
+  verificationToolNames: string[]
+  finishToolNames: string[]
+  fullBenchmarkMinQueries: number
+  fullBenchmarkMinRecall: number
+  benchmarkScoreTolerancePercent: number
+  stopRetryOnDeterministicErrors: boolean
+  maxTrackedResults: number
+}
+
+function resolvedConfig(input: Config): ResolvedConfig {
+  const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh')
+  const adaptive: AdaptiveReasoningMode = input.adaptiveReasoning === true ? 'phase'
+    : input.adaptiveReasoning === false || input.adaptiveReasoning === undefined ? 'off'
+      : input.adaptiveReasoning
+  const profile = input.augmentationProfile ?? 'governor'
+  const nativeCanonical = profile === 'native-canonical'
+  const profileJSpace: JSpaceAssistMode = profile === 'jspace-assist' || profile === 'hybrid-assist' ? 'lite' : 'off'
+  const profileRouter: RouterAssistMode = profile === 'router-assist' || profile === 'hybrid-assist' ? 'minimal-first' : 'off'
+  return {
+    mode: input.mode ?? 'active',
+    augmentationProfile: profile,
+    jspaceAssist: nativeCanonical ? 'off' : (input.jspaceAssist ?? profileJSpace),
+    routerAssist: nativeCanonical ? 'off' : (input.routerAssist ?? profileRouter),
+    semanticVerifier: input.semanticVerifier ?? 'risk',
+    ...(input.semanticVerifierProvider ? { semanticVerifierProvider: input.semanticVerifierProvider } : {}),
+    ...(input.semanticVerifierModel ? { semanticVerifierModel: input.semanticVerifierModel } : {}),
+    semanticVerifierMaxTokens: input.semanticVerifierMaxTokens ?? 1536,
+    maxSemanticVerifierCalls: input.maxSemanticVerifierCalls ?? 2,
+    capabilityControl: input.capabilityControl ?? 'guard',
+    adaptiveReasoning: nativeCanonical ? 'off' : adaptive,
+    adaptiveRouting: input.adaptiveRouting ?? 'shadow',
+    adaptiveEscalation: input.adaptiveEscalation ?? 'calibrated',
+    routeChallenger: input.routeChallenger ?? 'risk',
+    routeChallengerMinRisk: input.routeChallengerMinRisk ?? 'medium',
+    maxRouteChallengesPerEpisode: input.maxRouteChallengesPerEpisode ?? 1,
+    experienceMemory: input.experienceMemory ?? true,
+    experiencePath: input.experiencePath ?? join(dshHome, 'coursekeeper', 'experiences-v1.jsonl'),
+    experienceMaxEntries: input.experienceMaxEntries ?? 5000,
+    memoryTopK: input.memoryTopK ?? 8,
+    memoryMinSimilarity: input.memoryMinSimilarity ?? 0.60,
+    experienceHalfLifeDays: input.experienceHalfLifeDays ?? 90,
+    bayesianCalibration: input.bayesianCalibration ?? true,
+    bayesianPriorStrength: input.bayesianPriorStrength ?? 6,
+    memoryWeight: input.memoryWeight ?? 0.10,
+    bayesianWeight: input.bayesianWeight ?? 0.10,
+    maxAdaptiveAdjustment: input.maxAdaptiveAdjustment ?? 0.15,
+    minEffectiveSupport: input.minEffectiveSupport ?? 3,
+    routeMarginThreshold: input.routeMarginThreshold ?? 0.08,
+    safeExplorationRate: input.safeExplorationRate ?? 0,
+    crossProfileWeight: input.crossProfileWeight ?? 0.25,
+    crossModelWeight: input.crossModelWeight ?? 0,
+    stalePolicyWeight: input.stalePolicyWeight ?? 0.5,
+    harnessVersion: input.harnessVersion ?? 'dsh-0.1.x',
+    modelRevision: input.modelRevision ?? 'unspecified',
+    autoVerify: input.autoVerify ?? true,
+    maxAutomaticContinuations: input.maxAutomaticContinuations ?? 1,
+    noInformationLimit: input.noInformationLimit ?? 3,
+    maxDynamicHintChars: input.maxDynamicHintChars ?? 640,
+    exposeStatusTool: input.exposeStatusTool ?? (nativeCanonical ? false : true),
+    exposeControlTool: input.exposeControlTool ?? (nativeCanonical ? false : true),
+    exposeSemanticVerifierTool: input.exposeSemanticVerifierTool ?? (nativeCanonical ? false : true),
+    ledger: input.ledger ?? true,
+    ledgerPath: input.ledgerPath ?? join(dshHome, 'coursekeeper', 'decisions.jsonl'),
+    maxLedgerBytes: input.maxLedgerBytes ?? 10 * 1024 * 1024,
+    benchmarkRequired: input.benchmarkRequired ?? false,
+    benchmarkToolNames: input.benchmarkToolNames ?? [...DEFAULT_BENCHMARK_TOOL_NAMES],
+    verificationToolNames: input.verificationToolNames ?? [...DEFAULT_VERIFICATION_TOOL_NAMES],
+    finishToolNames: input.finishToolNames ?? [...DEFAULT_FINISH_TOOL_NAMES],
+    fullBenchmarkMinQueries: input.fullBenchmarkMinQueries ?? 10_000,
+    fullBenchmarkMinRecall: input.fullBenchmarkMinRecall ?? 0.95,
+    benchmarkScoreTolerancePercent: input.benchmarkScoreTolerancePercent ?? 2,
+    stopRetryOnDeterministicErrors: input.stopRetryOnDeterministicErrors ?? true,
+    maxTrackedResults: input.maxTrackedResults ?? 256,
+  }
+}
+
+interface MutableEpisodeMetrics {
+  requests: number
+  steps: number
+  toolCalls: number
+  verifierCalls: number
+  routeChallenges: number
+  recoveries: number
+  inputTokens?: number
+  cachedInputTokens?: number
+  reasoningTokens?: number
+}
+
+interface RuntimeState {
+  readonly agent: any
+  readonly governor: GovernorState
+  guardDispose?: () => void
+  restrictionDispose?: () => void
+  restrictionDenied: string[]
+  effortOverrideApplied: boolean
+  jspaceInjectedEpisode?: number
+  lastProvider?: string
+  lastModel?: string
+  semanticVerifierInFlight: boolean
+  adaptivePreparedKey?: string
+  taskSignature?: TaskSignature
+  calibrationDomain?: CalibrationDomain
+  metrics: MutableEpisodeMetrics
+  externalFailure: boolean
+  experienceRecordedEpisode?: number
+  routeChallengeCount: number
+  nativeCanonicalSurface?: {
+    personaExact: boolean
+    personaFirst: boolean
+    toolPrefix: readonly string[]
+    toolPrefixMatch: boolean
+    auxiliaryToolsAtEnd: boolean
+    deviations: readonly string[]
+    toolSurfaceHash: string
+    stable: boolean
+  }
+  nativeCanonicalBaselineToolHash?: string
+  protocolRequest?: ReturnType<typeof observeRequestProtocol>
+  suppressedVisiblePolicies: number
+}
+
+function newEpisodeMetrics(): MutableEpisodeMetrics {
+  return { requests: 0, steps: 0, toolCalls: 0, verifierCalls: 0, routeChallenges: 0, recoveries: 0 }
+}
+
+function normalizedFamily(value: unknown): string {
+  return String(value ?? 'unknown').trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-').slice(0, 96) || 'unknown'
+}
+
+function riskRank(risk: RiskLevel): number { return risk === 'high' ? 2 : risk === 'medium' ? 1 : 0 }
+
+function contentText(content: readonly any[]): string {
+  return (content ?? []).map((block: any) => {
+    if (typeof block === 'string') return block
+    if (block?.type === 'text' || block?.type === 'reasoning') return String(block.text ?? '')
+    if (block?.type === 'tool-result') return contentText(block.content ?? [])
+    return ''
+  }).join('\n')
+}
+
+function parseArguments(raw: unknown): unknown {
+  if (typeof raw !== 'string') return raw
+  try { return JSON.parse(raw) } catch { return {} }
+}
+
+function pluginMessage(text: string, purpose: string): any {
+  return createUserMessage({
+    content: [{ type: 'text', text }],
+    source: { kind: 'plugin', plugin: `coursekeeper/${purpose}` },
+  })
+}
+
+function insertAfterLastHuman(messages: any[], inserted: any): any[] {
+  const output = [...messages]
+  const index = output.findLastIndex(message => message?.source?.kind === 'user')
+  output.splice(index < 0 ? output.length : index + 1, 0, inserted)
+  return output
+}
+
+function effortRank(id: string, index: number): number {
+  const value = id.toLowerCase()
+  if (value === 'max') return 100
+  if (value === 'xhigh') return 90
+  if (value === 'high') return 80
+  if (value === 'medium') return 60
+  if (value === 'low') return 40
+  if (value === 'off' || value === 'none' || value === 'disabled') return 0
+  return 50 + index
+}
+
+function deepestEffort(info: any): string | undefined {
+  const efforts = info?.reasoning?.efforts
+  if (!Array.isArray(efforts) || efforts.length === 0) return undefined
+  return [...efforts]
+    .sort((a, b) => effortRank(String(b.id), efforts.indexOf(b)) - effortRank(String(a.id), efforts.indexOf(a)))
+    .find(effort => effortRank(String(effort.id), efforts.indexOf(effort)) > 0)?.id
+}
+
+function phaseNeedsDepth(phase: string): boolean {
+  return phase === 'inspect' || phase === 'design' || phase === 'recover'
+}
+
+function episodeNeedsDepth(state: GovernorState): boolean {
+  const episode = state.episode
+  if (!episode) return false
+  return episode.route.route === 'plan' || episode.route.route === 'explore'
+    || (episode.route.route === 'inspect' && (episode.contract.risk === 'high' || episode.contract.complexity >= 0.68))
+}
+
+export function apply(ctx: Context, inputConfig: Config = {}): void {
+  const config = resolvedConfig(inputConfig)
+  const runtimeStates = new Map<any, RuntimeState>()
+  const sessionStates = new WeakMap<any, RuntimeState>()
+  const modelInfo = new Map<string, Promise<any>>()
+  const ledger = new DecisionLedger({ enabled: config.ledger, path: config.ledgerPath, maxBytes: config.maxLedgerBytes })
+  const experienceStore = new ExperienceStore({ enabled: config.experienceMemory, path: config.experiencePath, maxInMemory: config.experienceMaxEntries })
+  void experienceStore.ready()
+
+  const stateOptions = () => ({
+    maxDynamicHintChars: config.maxDynamicHintChars,
+    noInformationLimit: config.noInformationLimit,
+    fullBenchmarkMinQueries: config.fullBenchmarkMinQueries,
+    fullBenchmarkMinRecall: config.fullBenchmarkMinRecall,
+    benchmarkScoreTolerancePercent: config.benchmarkScoreTolerancePercent,
+    benchmarkRequired: config.benchmarkRequired,
+    benchmarkToolNames: config.benchmarkToolNames,
+    verificationToolNames: config.verificationToolNames,
+    finishToolNames: config.finishToolNames,
+    semanticVerifierMode: config.semanticVerifier,
+  })
+
+  const classifyExecution = (execution: any) => classifyTool(execution.name, parseArguments(execution.arguments ?? {}), {
+    benchmarkToolNames: config.benchmarkToolNames,
+    verificationToolNames: config.verificationToolNames,
+    finishToolNames: config.finishToolNames,
+    controlToolNames: [COURSEKEEPER_CONTROL_TOOL, COURSEKEEPER_VERIFY_TOOL, LEGACY_TRAJECTORY_CONTROL_TOOL, LEGACY_TRAJECTORY_VERIFY_TOOL],
+  })
+
+  const stateFor = (agent: any): RuntimeState => {
+    let runtime = runtimeStates.get(agent)
+    if (runtime) return runtime
+    const governor = Array.isArray(agent?.session?.events)
+      ? rebuildStateFromEvents(agent.session.events, stateOptions())
+      : createGovernorState()
+    runtime = {
+      agent, governor, restrictionDenied: [], effortOverrideApplied: false, semanticVerifierInFlight: false,
+      metrics: newEpisodeMetrics(), externalFailure: false, routeChallengeCount: 0, suppressedVisiblePolicies: 0,
+    }
+    runtimeStates.set(agent, runtime)
+    if (agent?.session) sessionStates.set(agent.session, runtime)
+    installGuard(runtime)
+    refreshRestriction(runtime)
+    ledger.record({ event: 'state/rebuilt', sessionId: agent?.id, events: agent?.session?.events?.length ?? 0, episode: governor.episode?.id ?? null })
+    return runtime
+  }
+
+  const domainFor = (runtime: RuntimeState): CalibrationDomain => ({
+    providerFamily: normalizedFamily(runtime.lastProvider ?? runtime.agent?.options?.provider),
+    modelFamily: normalizedFamily(runtime.lastModel ?? runtime.agent?.options?.model),
+    modelRevision: config.modelRevision,
+    augmentationProfile: config.augmentationProfile,
+    harnessVersion: config.harnessVersion,
+    policySchemaVersion: 'coursekeeper-adaptive-v1',
+  })
+
+  const metricsFor = (runtime: RuntimeState): RouteExperienceMetrics => ({
+    requests: runtime.metrics.requests,
+    steps: runtime.metrics.steps,
+    toolCalls: runtime.metrics.toolCalls,
+    evidenceActions: runtime.governor.episode?.evidence.filter(event => event.weight > 0).length ?? 0,
+    verifierCalls: runtime.metrics.verifierCalls,
+    routeChallenges: runtime.metrics.routeChallenges,
+    reroutes: runtime.governor.episode?.transitions.length ?? 0,
+    recoveries: runtime.metrics.recoveries,
+    ...(runtime.metrics.inputTokens === undefined ? {} : { inputTokens: runtime.metrics.inputTokens }),
+    ...(runtime.metrics.cachedInputTokens === undefined ? {} : { cachedInputTokens: runtime.metrics.cachedInputTokens }),
+    ...(runtime.metrics.reasoningTokens === undefined ? {} : { reasoningTokens: runtime.metrics.reasoningTokens }),
+  })
+
+  const finalizeExperience = (runtime: RuntimeState, forceCompletion?: 'success' | 'blocked' | 'abandoned' | 'unknown'): void => {
+    const state = runtime.governor
+    const episode = state.episode
+    if (!episode || runtime.experienceRecordedEpisode === episode.id || !config.experienceMemory) return
+    const signature = runtime.taskSignature ?? buildTaskSignature(episode.contract, state.knownArtifacts)
+    const domain = runtime.calibrationDomain ?? domainFor(runtime)
+    const completion = forceCompletion ?? inferCompletion(state, config.benchmarkRequired)
+    const experience = buildRouteExperience(state, signature, domain, metricsFor(runtime), completion, runtime.externalFailure, config.benchmarkRequired)
+    if (!experience) return
+    experienceStore.append(experience)
+    runtime.experienceRecordedEpisode = episode.id
+    ledger.record({
+      event: 'adaptive/experience', sessionId: runtime.agent?.id, episode: episode.id,
+      initialRoute: experience.initialRoute, finalRoute: experience.finalRoute, completion: experience.completion,
+      routeSignals: experience.routeSignals, transitions: experience.transitions, domain: experience.domain,
+    })
+  }
+
+  const resetEpisodeRuntime = (runtime: RuntimeState): void => {
+    runtime.adaptivePreparedKey = undefined
+    runtime.taskSignature = undefined
+    runtime.calibrationDomain = undefined
+    runtime.metrics = newEpisodeMetrics()
+    runtime.externalFailure = false
+    runtime.experienceRecordedEpisode = undefined
+    runtime.routeChallengeCount = 0
+    runtime.nativeCanonicalSurface = undefined
+    runtime.nativeCanonicalBaselineToolHash = undefined
+    runtime.protocolRequest = undefined
+    runtime.suppressedVisiblePolicies = 0
+  }
+
+  const adaptivePolicyOptions = () => ({
+    mode: config.adaptiveRouting,
+    memoryTopK: config.memoryTopK,
+    memoryMinSimilarity: config.memoryMinSimilarity,
+    halfLifeDays: config.experienceHalfLifeDays,
+    priorStrength: config.bayesianPriorStrength,
+    memoryWeight: config.memoryWeight,
+    bayesianWeight: config.bayesianCalibration ? config.bayesianWeight : 0,
+    maxAdjustment: config.maxAdaptiveAdjustment,
+    minEffectiveSupport: config.minEffectiveSupport,
+    marginThreshold: config.routeMarginThreshold,
+    safeExplorationRate: config.safeExplorationRate,
+    explorationSample: Math.random(),
+    crossProfileWeight: config.crossProfileWeight,
+    crossModelWeight: config.crossModelWeight,
+    stalePolicyWeight: config.stalePolicyWeight,
+  })
+
+  const runRouteChallenger = async (runtime: RuntimeState, signature: TaskSignature, decision: ReturnType<typeof decideAdaptiveRoute>): Promise<ReturnType<typeof decideAdaptiveRoute>> => {
+    const episode = runtime.governor.episode
+    if (!episode || config.routeChallenger === 'off' || config.adaptiveRouting !== 'active' || !decision.challengerEligible
+      || riskRank(episode.contract.risk) < riskRank(config.routeChallengerMinRisk) || runtime.routeChallengeCount >= config.maxRouteChallengesPerEpisode) return decision
+    const provider = config.semanticVerifierProvider ?? runtime.lastProvider ?? runtime.agent?.options?.provider
+    const model = config.semanticVerifierModel ?? runtime.lastModel ?? runtime.agent?.options?.model
+    if (!provider || !model) return decision
+    runtime.routeChallengeCount++
+    runtime.metrics.routeChallenges++
+    let text = ''
+    try {
+      const stream = (ctx as any).llm.stream({
+        provider, model,
+        system: 'You are a route challenger. Judge only which evidence-acquisition route is safer and more efficient; do not solve the task.',
+        messages: [{ role: 'user', content: [{ type: 'text', text: routeChallengerPrompt(signature, decision, episode.contract.objective) }] }],
+        maxTokens: Math.min(512, config.semanticVerifierMaxTokens),
+      })
+      for await (const chunk of stream) {
+        if (chunk?.type === 'text-delta') text += String(chunk.text ?? '')
+        else if (chunk?.type === 'block-end' && chunk?.block?.type === 'text' && text.length === 0) text += String(chunk.block.text ?? '')
+      }
+      const result = parseRouteChallenge(text, decision.eligible)
+      if (!result) return { ...decision, challenged: true, reason: 'route challenger output was unparseable; adaptive decision retained' }
+      const selected = result.decision === 'challenge' ? result.route : decision.adaptiveRoute
+      ledger.record({ event: 'adaptive/challenger', sessionId: runtime.agent?.id, episode: episode.id, proposed: decision.adaptiveRoute, selected, decision: result.decision, reason: result.reason })
+      return withChallenge(decision, selected, `route challenger ${result.decision}: ${result.reason}`)
+    } catch (error) {
+      ledger.record({ event: 'adaptive/challenger-error', sessionId: runtime.agent?.id, episode: episode.id, error: error instanceof Error ? error.message : String(error) })
+      return { ...decision, challenged: true, reason: 'route challenger failed; adaptive decision retained' }
+    }
+  }
+
+  const prepareAdaptiveRoute = async (runtime: RuntimeState): Promise<void> => {
+    const state = runtime.governor
+    const episode = state.episode
+    if (!episode || config.adaptiveRouting === 'off') return
+    const key = `${episode.id}:${episode.humanRound}`
+    if (runtime.adaptivePreparedKey === key) return
+    await experienceStore.ready()
+    const signature = buildTaskSignature(episode.contract, state.knownArtifacts)
+    const domain = domainFor(runtime)
+    let decision = decideAdaptiveRoute(episode.contract, signature, domain, experienceStore.values(), adaptivePolicyOptions())
+    decision = await runRouteChallenger(runtime, signature, decision)
+    runtime.taskSignature = signature
+    runtime.calibrationDomain = domain
+    runtime.adaptivePreparedKey = key
+    applyAdaptiveInitialRoute(state, decision, stateOptions())
+    ledger.record({
+      event: 'adaptive/route', sessionId: runtime.agent?.id, episode: episode.id, humanRound: episode.humanRound,
+      mode: config.adaptiveRouting, bucket: decision.bucket, baseRoute: decision.baseRoute,
+      adaptiveRoute: decision.adaptiveRoute, appliedRoute: decision.appliedRoute, margin: decision.margin,
+      support: decision.effectiveSupport, challenged: decision.challenged, reason: decision.reason,
+    })
+  }
+
+  const maybeEscalate = (runtime: RuntimeState, sequence: number): void => {
+    if (config.adaptiveEscalation === 'off' || !runtime.governor.episode) return
+    const domain = runtime.calibrationDomain ?? domainFor(runtime)
+    const suggestion = suggestEscalation(runtime.governor, experienceStore.values(), domain, {
+      noInformationLimit: config.noInformationLimit,
+      calibrated: config.adaptiveEscalation === 'calibrated',
+      halfLifeDays: config.experienceHalfLifeDays,
+      priorStrength: config.bayesianPriorStrength,
+      crossProfileWeight: config.crossProfileWeight,
+      crossModelWeight: config.crossModelWeight,
+      stalePolicyWeight: config.stalePolicyWeight,
+    })
+    if (!suggestion) return
+    if (config.adaptiveRouting === 'shadow') {
+      ledger.record({ event: 'adaptive/escalation-shadow', sessionId: runtime.agent?.id, episode: runtime.governor.episode.id, ...suggestion })
+      return
+    }
+    if (config.adaptiveRouting !== 'active') return
+    const result = applyAdaptiveEscalation(runtime.governor, suggestion.to, suggestion.reason, suggestion.detail, sequence, stateOptions())
+    if (result.ok) {
+      runtime.metrics.recoveries++
+      refreshRestriction(runtime)
+      ledger.record({ event: 'adaptive/escalation', sessionId: runtime.agent?.id, episode: runtime.governor.episode.id, ...suggestion, result: result.message })
+    }
+  }
+
+  const runSemanticVerifier = async (runtime: RuntimeState, signal?: AbortSignal): Promise<boolean> => {
+    const state = runtime.governor
+    const episode = state.episode
+    const semantic = episode?.semanticVerification
+    if (!episode || !semantic?.required) return true
+    if (semantic.status === 'passed' && semantic.verifiedWorkspaceRevision === state.workspace.revision) return true
+    if (runtime.semanticVerifierInFlight) return false
+    if (semantic.attempts >= config.maxSemanticVerifierCalls) return false
+    const packet = buildEvidencePacket(state)
+    if (!packet) return false
+    const provider = config.semanticVerifierProvider ?? runtime.lastProvider ?? runtime.agent?.options?.provider
+    const model = config.semanticVerifierModel ?? runtime.lastModel ?? runtime.agent?.options?.model
+    if (!provider || !model) {
+      semantic.status = 'unknown'
+      semantic.reason = 'semantic verifier route unavailable: no provider/model has been observed'
+      semantic.attempts++
+      refreshPolicyHint(state, stateOptions())
+      return false
+    }
+    runtime.semanticVerifierInFlight = true
+    runtime.metrics.verifierCalls++
+    semantic.status = 'running'
+    let text = ''
+    try {
+      const stream = (ctx as any).llm.stream({
+        provider,
+        model,
+        system: 'You are an independent verifier. You receive evidence packets, not the main model reasoning. Be concise, skeptical, and evidence-bound.',
+        messages: [{ role: 'user', content: [{ type: 'text', text: semanticVerifierPrompt(packet) }] }],
+        maxTokens: config.semanticVerifierMaxTokens,
+      })
+      for await (const chunk of stream) {
+        if (signal?.aborted) break
+        if (chunk?.type === 'text-delta') text += String(chunk.text ?? '')
+        else if (chunk?.type === 'block-end' && chunk?.block?.type === 'text' && text.length === 0) text += String(chunk.block.text ?? '')
+      }
+      const result = parseSemanticVerifierResult(text)
+      if (!result) {
+        semantic.status = 'unknown'
+        semantic.reason = 'semantic verifier returned unparseable output'
+        semantic.attempts++
+        semantic.verifiedWorkspaceRevision = state.workspace.revision
+        ledger.record({ event: 'semantic-verifier/unparseable', sessionId: runtime.agent?.id, episode: episode.id, provider, model, outputHash: fingerprint(text) })
+        refreshPolicyHint(state, stateOptions())
+        return false
+      }
+      const applied = applySemanticVerifierResult(state, result)
+      if (result.decision === 'fail_route') {
+        episode.recoveryBlocker = `Independent verifier rejected route ${episode.route.route}. Reroute with cause=verifier-fail before completion.`
+        episode.phase = 'recover'
+      } else if (result.decision === 'patch') {
+        episode.recoveryBlocker = undefined
+        episode.phase = 'inspect'
+      } else if (result.decision === 'warn' || result.decision === 'unknown') {
+        episode.recoveryBlocker = result.nextEvidence[0]
+          ? `Independent verifier requires more evidence: ${result.nextEvidence[0]}`
+          : `Independent verifier did not pass: ${result.reason}`
+        episode.phase = 'verify'
+      } else if (result.decision === 'pass') {
+        episode.recoveryBlocker = undefined
+      }
+      refreshPolicyHint(state, stateOptions())
+      ledger.record({
+        event: 'semantic-verifier/result', sessionId: runtime.agent?.id, episode: episode.id,
+        provider, model, decision: result.decision, reason: result.reason,
+        contradictions: result.contradictions, nextEvidence: result.nextEvidence,
+        workspaceRevision: state.workspace.revision, applied: applied.message,
+      })
+      return result.decision === 'pass'
+    } catch (error) {
+      semantic.status = 'unknown'
+      semantic.reason = error instanceof Error ? error.message : String(error)
+      semantic.attempts++
+      semantic.verifiedWorkspaceRevision = state.workspace.revision
+      refreshPolicyHint(state, stateOptions())
+      ledger.record({ event: 'semantic-verifier/error', sessionId: runtime.agent?.id, episode: episode.id, error: semantic.reason })
+      return false
+    } finally {
+      runtime.semanticVerifierInFlight = false
+    }
+  }
+
+  const releaseRestriction = (runtime: RuntimeState, reason: string): void => {
+    runtime.restrictionDispose?.()
+    runtime.restrictionDispose = undefined
+    if (runtime.restrictionDenied.length > 0) {
+      ledger.record({ event: 'restriction/released', sessionId: runtime.agent?.id, reason, denied: runtime.restrictionDenied })
+    }
+    runtime.restrictionDenied = []
+  }
+
+  const refreshRestriction = (runtime: RuntimeState): void => {
+    if (config.capabilityControl !== 'restrict' || config.mode !== 'active') {
+      releaseRestriction(runtime, 'mode-not-restrict')
+      return
+    }
+    const gate = mutationGate(runtime.governor)
+    if (gate.allowed) {
+      releaseRestriction(runtime, 'evidence-gate-open')
+      return
+    }
+    if (runtime.restrictionDispose) return
+    try {
+      const names = (ctx as any).tools.schemas(runtime.agent).map((tool: any) => tool.name)
+      const denied = ['write', 'edit'].filter(name => names.includes(name))
+      if (names.includes('str_replace_editor') && names.includes('read')) denied.push('str_replace_editor')
+      if (denied.length === 0) return
+      runtime.restrictionDenied = denied
+      runtime.restrictionDispose = runtime.agent.ctx.tools.restrict({ deny: denied })
+      ledger.record({ event: 'restriction/applied', sessionId: runtime.agent?.id, denied, reason: gate.reason })
+    } catch (error) {
+      ledger.record({ event: 'restriction/rejected', sessionId: runtime.agent?.id, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  function installGuard(runtime: RuntimeState): void {
+    if (runtime.guardDispose || config.mode !== 'active') return
+    try {
+      runtime.guardDispose = runtime.agent.ctx.tools.guard((execution: any) => {
+        const semantics = classifyExecution(execution)
+        if (semantics.effect === 'finish') {
+          const blockers = completionBlockers(runtime.governor, stateOptions())
+          if (blockers.length > 0) return `coursekeeper blocked ${execution.name}: ${blockers.join(' ')}`
+          return undefined
+        }
+        if (config.capabilityControl !== 'guard') return undefined
+        if (semantics.effect !== 'mutate' && !semantics.riskyMutation) return undefined
+        const gate = mutationGate(runtime.governor)
+        if (gate.allowed) return undefined
+        ledger.record({ event: 'mutation/blocked', sessionId: runtime.agent?.id, tool: execution.name, reason: gate.reason })
+        return `coursekeeper blocked mutation: ${gate.reason}`
+      })
+    } catch (error) {
+      ledger.record({ event: 'guard/rejected', sessionId: runtime.agent?.id, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  ctx.on('agent/created', ({ agent }: any) => { stateFor(agent) })
+  ctx.on('agent/disposed', ({ agent }: any) => {
+    const runtime = runtimeStates.get(agent)
+    if (runtime) {
+      finalizeExperience(runtime)
+      runtime.guardDispose?.()
+      releaseRestriction(runtime, 'agent-disposed')
+    }
+    runtimeStates.delete(agent)
+  })
+
+  // Durable human input is available here before first assembly.
+  ctx.on('agent/inbox/claimed', ({ agent, message, turn }: any) => {
+    if (config.mode === 'off' || message?.source?.kind !== 'user') return
+    const runtime = stateFor(agent)
+    const state = runtime.governor
+    const text = contentText(message.content ?? [])
+    const previous = state.episode
+    const preview = classifyTaskContract(text, previous ? { objective: previous.contract.objective, artifacts: new Set([...state.knownArtifacts, ...previous.contract.artifacts]) } : undefined)
+    if (previous && preview.relation === 'new') finalizeExperience(runtime)
+    const previousEpisodeId = previous?.id
+    acceptHumanTask(state, text, Number(turn ?? 0), state.planMode, stateOptions())
+    if (state.episode?.id !== previousEpisodeId) resetEpisodeRuntime(runtime)
+    else { runtime.adaptivePreparedKey = undefined; runtime.taskSignature = undefined; runtime.calibrationDomain = undefined }
+    refreshRestriction(runtime)
+    ledger.record({
+      event: 'policy/decided', sessionId: agent.id, turn, messageId: message.id,
+      messageHash: fingerprint(text), episode: state.episode?.id ?? null,
+      relation: state.episode?.contract.relation, kind: state.episode?.contract.kind,
+      route: state.episode?.route.route, phase: state.episode?.phase, risk: state.episode?.contract.risk,
+      capabilityControl: config.capabilityControl, adaptiveRouting: config.adaptiveRouting,
+    })
+  })
+
+  // Default governor mode preserves the official surface. Router-assist is an explicit
+  // experimental compatibility mode and is therefore allowed to reshape only the first request.
+  ctx.on('system-prompt/assemble', async (_assembly: any, context: any, next: any) => {
+    const assembled = await next()
+    const agent = context.agent
+    if (!agent || config.mode === 'off') return assembled
+    const runtime = stateFor(agent)
+    await prepareAdaptiveRoute(runtime)
+    refreshRestriction(runtime)
+    let output = assembled
+    let routerChanged = false
+    let nativeCanonicalChanged = false
+    if (config.mode === 'active' && config.augmentationProfile === 'native-canonical') {
+      const canonical = applyNativeCanonicalProfile(assembled)
+      output = { ...assembled, sections: canonical.sections, tools: canonical.tools }
+      nativeCanonicalChanged = canonical.changed
+      const toolSurfaceHash = fingerprint(canonical.tools)
+      if (!runtime.nativeCanonicalBaselineToolHash) runtime.nativeCanonicalBaselineToolHash = toolSurfaceHash
+      runtime.nativeCanonicalSurface = {
+        personaExact: canonical.personaExact, personaFirst: canonical.personaFirst,
+        toolPrefix: canonical.toolPrefix, toolPrefixMatch: canonical.toolPrefixMatch,
+        auxiliaryToolsAtEnd: canonical.auxiliaryToolsAtEnd, deviations: canonical.deviations,
+        toolSurfaceHash, stable: runtime.nativeCanonicalBaselineToolHash === toolSurfaceHash,
+      }
+      ledger.record({
+        event: 'protocol/native-canonical', sessionId: agent.id, episode: runtime.governor.episode?.id ?? null,
+        personaExact: canonical.personaExact, personaFirst: canonical.personaFirst, toolPrefix: canonical.toolPrefix,
+        toolPrefixMatch: canonical.toolPrefixMatch, auxiliaryToolsAtEnd: canonical.auxiliaryToolsAtEnd,
+        stable: runtime.nativeCanonicalSurface.stable, deviations: canonical.deviations,
+      })
+    }
+    if (config.mode === 'active' && config.augmentationProfile !== 'native-canonical' && config.routerAssist !== 'off' && runtime.governor.episode) {
+      const promoted = Array.isArray(agent?.session?.events) && agent.session.events.some((event: any) => event?.type === 'tool/call')
+      const assisted = applyRouterAssist(assembled, runtime.governor.episode.route.route, config.routerAssist, promoted)
+      if (assisted.changed) {
+        output = { ...assembled, sections: assisted.sections, tools: assisted.tools }
+        routerChanged = true
+      }
+    }
+    runtime.governor.assemblyHash = fingerprint({ sections: output.sections, tools: output.tools, variables: output.variables })
+    ledger.record({
+      event: 'request/assembled', sessionId: agent.id, assemblyHash: runtime.governor.assemblyHash,
+      augmentationProfile: config.augmentationProfile, routerAssist: config.routerAssist, routerChanged, nativeCanonicalChanged,
+      sectionNames: output.sections?.map((section: any) => section.name) ?? [],
+      toolNames: output.tools?.map((tool: any) => tool.name) ?? [],
+    })
+    return output
+  })
+
+  ctx.on('agent/pre-step', async ({ agent }: any, next: any): Promise<any> => {
+    const decision = await next()
+    if (decision?.kind === 'reject' || config.mode !== 'active') return decision
+    const runtime = stateFor(agent)
+    const state = runtime.governor
+    if (config.augmentationProfile === 'native-canonical') {
+      if (state.pendingHint && state.injectedRevision < state.policyRevision) {
+        runtime.suppressedVisiblePolicies++
+        state.injectedRevision = state.policyRevision
+        state.pendingHint = undefined
+        ledger.record({ event: 'protocol/policy-suppressed', sessionId: agent.id, episode: state.episode?.id ?? null })
+      }
+      return decision
+    }
+    const additions: string[] = []
+    const episodeId = state.episode?.id
+    if (episodeId !== undefined && config.jspaceAssist !== 'off' && runtime.jspaceInjectedEpisode !== episodeId) {
+      additions.push(jspaceAssistKernel(config.jspaceAssist))
+      runtime.jspaceInjectedEpisode = episodeId
+    }
+    if (state.pendingHint && state.injectedRevision < state.policyRevision) additions.push(state.pendingHint)
+    if (additions.length === 0) return decision
+    const message = pluginMessage(additions.filter(Boolean).join('\n'), additions.some(text => text.includes('<coursekeeper-kernel')) ? 'kernel-policy' : 'policy')
+    if (state.pendingHint && state.injectedRevision < state.policyRevision) markHintInjected(state)
+    return { ...decision, messages: insertAfterLastHuman(decision.messages ?? [], message) }
+  })
+
+  ctx.on('agent/request', async ({ agent, signal }: any, next: any): Promise<any> => {
+    const proposed = await next()
+    const runtime = stateFor(agent)
+    runtime.metrics.requests++
+    runtime.lastProvider = proposed?.provider ?? runtime.lastProvider
+    runtime.lastModel = proposed?.model ?? runtime.lastModel
+    if (config.augmentationProfile === 'native-canonical') {
+      runtime.protocolRequest = observeRequestProtocol(proposed?.messages ?? [])
+      ledger.record({ event: 'protocol/request-observed', sessionId: agent.id, episode: runtime.governor.episode?.id ?? null, ...runtime.protocolRequest })
+    }
+    if (config.mode !== 'active' || config.adaptiveReasoning === 'off') return proposed
+    const state = runtime.governor
+    const wantsDepth = config.adaptiveReasoning === 'episode' ? episodeNeedsDepth(state) : phaseNeedsDepth(state.episode?.phase ?? '')
+    if (!wantsDepth) {
+      if (!runtime.effortOverrideApplied) return proposed
+      const { reasoningEffort: _ignored, ...restored } = proposed
+      runtime.effortOverrideApplied = false
+      state.episode && (state.episode.effortOverride = undefined)
+      return restored
+    }
+    if (config.adaptiveReasoning === 'episode' && state.episode?.effortOverride) {
+      runtime.effortOverrideApplied = true
+      return { ...proposed, reasoningEffort: ReasoningEffortId(state.episode.effortOverride) }
+    }
+    const key = `${proposed.provider}\u0000${proposed.model}`
+    let pending = modelInfo.get(key)
+    if (!pending) {
+      pending = Promise.resolve((ctx as any).llm.resolveModelInfo(proposed.provider, proposed.model, signal)) as Promise<any>
+      modelInfo.set(key, pending)
+    }
+    try {
+      const info = await pending
+      signal?.throwIfAborted?.()
+      const effort = deepestEffort(info)
+      if (!effort || String(proposed.reasoningEffort ?? '') === String(effort)) return proposed
+      runtime.effortOverrideApplied = true
+      if (config.adaptiveReasoning === 'episode' && state.episode) state.episode.effortOverride = String(effort)
+      ledger.record({ event: 'reasoning/selected', sessionId: agent.id, mode: config.adaptiveReasoning, route: state.episode?.route.route, phase: state.episode?.phase, effort: String(effort) })
+      return { ...proposed, reasoningEffort: ReasoningEffortId(String(effort)) }
+    } catch (error) {
+      modelInfo.delete(key)
+      ledger.record({ event: 'reasoning/unavailable', sessionId: agent.id, error: error instanceof Error ? error.message : String(error) })
+      return proposed
+    }
+  })
+
+  ctx.on('agent/request-error', async ({ agent, turn, step, provider, failure }: any, next: any) => {
+    if (config.mode === 'off') return next()
+    const runtime = stateFor(agent)
+    runtime.externalFailure = true
+    if (!config.stopRetryOnDeterministicErrors || !isTerminalLlmFailure(failure)) return next()
+    if (runtime.governor.episode) {
+      runtime.governor.episode.phase = 'blocked'
+      runtime.governor.episode.blockedReason = `Model request is not retryable: ${failure?.code ?? 'invalid_request_error'}${failure?.status ? ` (HTTP ${failure.status})` : ''}. ${failure?.message ?? ''}`
+    }
+    ledger.record({ event: 'request/terminal-error', sessionId: agent.id, turn, step, provider, status: failure?.status ?? null, code: failure?.code, message: failure?.message })
+    return undefined
+  })
+
+  ctx.on('session/event', (session: any, event: any) => {
+    const runtime = sessionStates.get(session)
+    if (!runtime || config.mode === 'off') return
+    const state = runtime.governor
+    switch (event.type) {
+      case 'tool/call': {
+        const toolName = String(event.data.name)
+        // Coursekeeper control is applied synchronously by its own execute() for immediate feedback.
+        if (toolName === COURSEKEEPER_CONTROL_TOOL || toolName === LEGACY_TRAJECTORY_CONTROL_TOOL) break
+        runtime.metrics.toolCalls++
+        registerToolCall(state, String(event.data.callId), toolName, parseArguments(event.data.arguments), event.seq, stateOptions())
+        break
+      }
+      case 'tool/code-dispatch-start':
+        runtime.metrics.toolCalls++
+        registerToolCall(state, String(event.data.subCallId), String(event.data.name), event.data.arguments, event.seq, stateOptions())
+        break
+      case 'tool/result': {
+        const block = event.data.message.content?.[0]
+        if (block?.type !== 'tool-result') break
+        const callId = String(event.data.message.source.callId)
+        const result = settleToolCall(state, callId, { isError: block.isError === true, content: contentText(block.content ?? []), meta: event.data.meta }, event.seq, stateOptions())
+        if (result) ledger.record({ event: 'tool/observed', sessionId: runtime.agent.id, seq: event.seq, callId, progress: result.kind, weight: result.weight, summary: result.summary, workspaceRevision: state.workspace.revision })
+        refreshRestriction(runtime)
+        maybeEscalate(runtime, event.seq)
+        break
+      }
+      case 'tool/code-dispatch': {
+        const result = settleToolCall(state, String(event.data.subCallId), { isError: event.data.isError === true, content: contentText(event.data.content ?? []), meta: event.data.meta }, event.seq, stateOptions())
+        if (result) ledger.record({ event: 'tool/observed', sessionId: runtime.agent.id, seq: event.seq, progress: result.kind, weight: result.weight, summary: result.summary, workspaceRevision: state.workspace.revision })
+        refreshRestriction(runtime)
+        maybeEscalate(runtime, event.seq)
+        break
+      }
+      case 'plan/mode':
+        state.planMode = event.data.active === true
+        if (state.planMode) releaseRestriction(runtime, 'plan-mode')
+        break
+      case 'step/end':
+        runtime.metrics.steps++
+        break
+      case 'llm/usage': {
+        const usage = event.data?.usage ?? event.data ?? {}
+        const input = Number(usage.inputTokens ?? usage.input_tokens)
+        const cached = Number(usage.cachedInputTokens ?? usage.cached_input_tokens)
+        const reasoning = Number(usage.reasoningTokens ?? usage.reasoning_tokens)
+        if (Number.isFinite(input)) runtime.metrics.inputTokens = (runtime.metrics.inputTokens ?? 0) + input
+        if (Number.isFinite(cached)) runtime.metrics.cachedInputTokens = (runtime.metrics.cachedInputTokens ?? 0) + cached
+        if (Number.isFinite(reasoning)) runtime.metrics.reasoningTokens = (runtime.metrics.reasoningTokens ?? 0) + reasoning
+        break
+      }
+      case 'turn/end':
+        if (state.turn?.turn === event.data.turn) state.turn = undefined
+        ledger.record({ event: 'turn/ended', sessionId: runtime.agent.id, turn: event.data.turn, reason: event.data.reason?.kind, route: state.episode?.route.route, phase: state.episode?.phase, blockers: completionBlockers(state, stateOptions()) })
+        break
+    }
+  })
+
+  ctx.on('agent/turn-stopping', async ({ agent, turn, signal }: any) => {
+    if (config.mode !== 'active' || !config.autoVerify || signal?.aborted) return
+    const runtime = stateFor(agent)
+    const state = runtime.governor
+    if (state.planMode) return
+    let blockers = completionBlockers(state, stateOptions())
+    if (blockers.length === 0) return
+
+    // Semantic verification is intentionally last: deterministic acceptance,
+    // readback, tests and benchmarks must be closed before paying for a model judge.
+    const nonSemantic = blockers.filter(blocker => !blocker.startsWith('Independent semantic verification remains:'))
+    const semantic = state.episode?.semanticVerification
+    if (nonSemantic.length === 0 && semantic?.required && semantic.status !== 'passed') {
+      const passed = await runSemanticVerifier(runtime, signal)
+      blockers = completionBlockers(state, stateOptions())
+      if (passed && blockers.length === 0) return
+    }
+
+    if (!state.turn || state.turn.turn !== turn) state.turn = { turn, automaticContinuations: 0, blockerReported: false, calls: new Map() }
+    if (state.turn.automaticContinuations < config.maxAutomaticContinuations) {
+      state.turn.automaticContinuations++
+      if (state.episode) state.episode.phase = state.episode.semanticVerification.required && state.episode.semanticVerification.status !== 'passed' ? 'verify' : state.episode.phase
+      const text = verificationPrompt(state, stateOptions())
+      agent.steer(pluginMessage(text, 'verification'))
+      ledger.record({ event: 'verification/continued', sessionId: agent.id, turn, attempt: state.turn.automaticContinuations, blockers, semantic: state.episode?.semanticVerification.status ?? null })
+      return
+    }
+    if (state.turn.blockerReported) return
+    state.turn.blockerReported = true
+    if (state.episode) { state.episode.phase = 'blocked'; state.episode.blockedReason = blockers.join(' ') }
+    agent.steer(pluginMessage(blockerReport(state, stateOptions()), 'blocker-report'))
+    ledger.record({ event: 'verification/blocked', sessionId: agent.id, turn, blockers, semantic: state.episode?.semanticVerification.status ?? null })
+  })
+
+  if (config.exposeControlTool) {
+    ctx.effect(() => (ctx as any).tools.register(defineTool({
+      name: COURSEKEEPER_CONTROL_TOOL,
+      description: 'Commit/reroute/falsify/support the current course, or satisfy/waive an acceptance obligation. Route changes obey commitment hysteresis.',
+      parameters: {
+        action: { type: 'string', required: true, enum: ['commit', 'reroute', 'falsify', 'support', 'accept', 'waive'] },
+        route: { type: 'string', enum: ['direct', 'inspect', 'plan', 'explore'] },
+        cause: { type: 'string', description: 'For reroute: falsified / contradicted / verifier-fail / budget-exhausted / user-correction.' },
+        hypothesis: { type: 'string' },
+        falsifier: { type: 'string' },
+        next_evidence: { type: 'string' },
+        min_evidence_actions: { type: 'number' },
+        max_evidence_actions: { type: 'number' },
+        epistemic: { type: 'string', enum: ['unsupported', 'plausible', 'supported', 'conflicted', 'contradicted'] },
+        obligation_id: { type: 'string' },
+        evidence: { type: 'string' },
+        reason: { type: 'string' },
+      },
+      output: { schema: { type: 'string' }, render: (_args: any, value: any) => [{ type: 'text', text: value }] },
+      async execute(args: Record<string, unknown>, exec: any) {
+        const agent = exec.agent
+        if (!agent) return JSON.stringify({ ok: false, message: 'no owning agent' })
+        const runtime = stateFor(agent)
+        const result = applyTrajectoryControl(runtime.governor, args, 0, stateOptions())
+        refreshRestriction(runtime)
+        ledger.record({ event: 'coursekeeper/control', sessionId: agent.id, action: args.action, result, route: runtime.governor.episode?.route.route, hypothesis: runtime.governor.episode?.route.hypothesis ?? null })
+        return JSON.stringify(result)
+      },
+      presentCall: () => ({ card: 'generic', title: 'Coursekeeper control', kind: 'write' }),
+    })))
+  }
+
+  if (config.exposeSemanticVerifierTool && config.semanticVerifier !== 'off') {
+    ctx.effect(() => (ctx as any).tools.register(defineTool({
+      name: COURSEKEEPER_VERIFY_TOOL,
+      description: 'Run the independent semantic verifier on the current evidence packet. Deterministic acceptance/test/benchmark obligations must be closed first unless force=true.',
+      parameters: { force: { type: 'boolean', description: 'Allow semantic verification before deterministic obligations are closed (research/debug only).' } },
+      output: { schema: { type: 'string' }, render: (_args: any, value: any) => [{ type: 'text', text: value }] },
+      async execute(args: Record<string, unknown>, exec: any) {
+        const agent = exec.agent
+        if (!agent) return JSON.stringify({ ok: false, message: 'no owning agent' })
+        const runtime = stateFor(agent)
+        const blockers = completionBlockers(runtime.governor, stateOptions())
+        const deterministic = blockers.filter(blocker => !blocker.startsWith('Independent semantic verification remains:'))
+        if (deterministic.length > 0 && args.force !== true) {
+          return JSON.stringify({ ok: false, message: 'deterministic obligations remain; semantic verifier deferred', blockers: deterministic })
+        }
+        const passed = await runSemanticVerifier(runtime)
+        return JSON.stringify({ ok: passed, semanticVerification: runtime.governor.episode?.semanticVerification ?? null, blockers: completionBlockers(runtime.governor, stateOptions()) })
+      },
+      presentCall: () => ({ card: 'generic', title: 'Semantic verifier', kind: 'read' }),
+    })))
+  }
+
+  if (config.exposeStatusTool) {
+    ctx.effect(() => (ctx as any).tools.register(defineTool({
+      name: COURSEKEEPER_STATUS_TOOL,
+      description: 'Read Coursekeeper route, commitment, adaptive calibration, obligations, progress, benchmark and verifier state.',
+      parameters: {},
+      output: { schema: { type: 'string' }, render: (_args: any, value: any) => [{ type: 'text', text: value }] },
+      async execute(_args: any, exec: any) {
+        const agent = exec.agent
+        if (!agent) return 'coursekeeper: no owning agent'
+        const runtime = stateFor(agent)
+        const state = runtime.governor
+        const packet = buildEvidencePacket(state)
+        const experience = await experienceStore.status()
+        return JSON.stringify({
+          mode: config.mode,
+          augmentationProfile: config.augmentationProfile,
+          protocolFidelity: config.augmentationProfile === 'native-canonical' ? {
+            profile: 'native-canonical',
+            surface: runtime.nativeCanonicalSurface ?? null,
+            requestObservation: runtime.protocolRequest ?? null,
+            suppressedVisiblePolicies: runtime.suppressedVisiblePolicies,
+            note: 'reasoning/tool-result fields are structural observations of the DSH request, not proof of provider-side serialization',
+          } : null,
+          jspaceAssist: config.jspaceAssist,
+          routerAssist: config.routerAssist,
+          semanticVerifier: config.semanticVerifier,
+          capabilityControl: config.capabilityControl,
+          adaptiveReasoning: config.adaptiveReasoning,
+          adaptiveRouting: config.adaptiveRouting,
+          adaptiveEscalation: config.adaptiveEscalation,
+          routeChallenger: { mode: config.routeChallenger, minRisk: config.routeChallengerMinRisk, maxPerEpisode: config.maxRouteChallengesPerEpisode },
+          episode: state.episode?.id ?? null,
+          humanRound: state.episode?.humanRound ?? 0,
+          relation: state.episode?.contract.relation ?? null,
+          kind: state.episode?.contract.kind ?? null,
+          route: state.episode?.route ?? null,
+          initialRoute: state.episode?.initialRoute ?? null,
+          routeTransitions: state.episode?.transitions ?? [],
+          adaptive: state.episode?.adaptive ?? null,
+          taskSignature: runtime.taskSignature ?? null,
+          calibrationDomain: runtime.calibrationDomain ?? null,
+          experienceStore: experience,
+          phase: state.episode?.phase ?? null,
+          risk: state.episode?.contract.risk ?? null,
+          vector: state.episode?.contract.vector ?? null,
+          acceptance: state.episode ? [...state.episode.acceptance.values()] : [],
+          openVerificationDebt: [...state.workspace.verificationDebt.values()],
+          workspaceRevision: state.workspace.revision,
+          artifacts: [...state.workspace.artifacts.values()],
+          noInformationStreak: state.noInformationStreak,
+          repeatedCallCount: state.repeatedCallCount,
+          blockers: completionBlockers(state, stateOptions()),
+          benchmark: state.episode?.benchmark ?? null,
+          semanticVerification: state.episode?.semanticVerification ?? null,
+          evidencePacket: packet ?? null,
+          controlPacket: currentControlPacket(state, stateOptions()) ?? null,
+          assemblyHash: state.assemblyHash ?? null,
+          ledger: ledger.status(),
+        }, (_key, value) => value instanceof Map ? Object.fromEntries(value) : value instanceof Set ? [...value] : value, 2)
+      },
+      presentCall: () => ({ card: 'generic', title: 'Coursekeeper status', kind: 'read' }),
+    })))
+  }
+
+  ctx.effect(() => async () => {
+    for (const runtime of runtimeStates.values()) {
+      finalizeExperience(runtime, 'unknown')
+      runtime.guardDispose?.()
+      releaseRestriction(runtime, 'plugin-disposed')
+    }
+    runtimeStates.clear()
+    await experienceStore.close()
+    await ledger.close()
+  }, 'coursekeeper.lifecycle')
+
+  ledger.record({
+    event: 'plugin/loaded',
+    mode: config.mode,
+    augmentationProfile: config.augmentationProfile,
+    nativeCanonical: config.augmentationProfile === 'native-canonical',
+    jspaceAssist: config.jspaceAssist,
+    routerAssist: config.routerAssist,
+    semanticVerifier: config.semanticVerifier,
+    capabilityControl: config.capabilityControl,
+    adaptiveReasoning: config.adaptiveReasoning,
+    adaptiveRouting: config.adaptiveRouting,
+    adaptiveEscalation: config.adaptiveEscalation,
+    routeChallenger: config.routeChallenger,
+    experienceMemory: config.experienceMemory,
+    benchmarkRequired: config.benchmarkRequired,
+  })
+}
