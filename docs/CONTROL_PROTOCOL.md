@@ -166,3 +166,36 @@ PLAN/EXPLORE 未 explicit commit
 ## 7. Replay 兼容
 
 v0.7 能识别新的 `coursekeeper_control` 事件，也兼容历史 `trajectory_control` durable events。动态 `<ck>` packet 也包含足以恢复 route、budget、epistemic、H/K/N 的紧凑状态。
+
+# v0.8 Rollout Control：Continue / Reroute / Resample
+
+v0.8 将控制动作从：
+
+```text
+continue / reroute / finish
+```
+
+扩展为：
+
+```text
+continue / reroute / resample(Verified Branching) / verify / finish
+```
+
+判别原则：
+
+```text
+route 不合适，但上下文仍可信 -> reroute
+trajectory contamination 高     -> resample
+```
+
+`resample` 不是模型自己发起一个新的 CoT 段，而是 controller 启动隔离 candidate wave。
+
+活动 branch wave 状态：
+
+```text
+collecting
+comparing
+selected
+```
+
+都是 finish-sensitive。只有 winner 已 apply 或 wave 明确失败/abort 后，主 completion protocol 才继续。

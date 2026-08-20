@@ -4,6 +4,8 @@ export interface DomainWeightOptions {
     crossProfileWeight: number;
     crossModelWeight: number;
     stalePolicyWeight: number;
+    crossProtocolWeight?: number;
+    crossRolloutWeight?: number;
 }
 export declare function domainWeight(current: CalibrationDomain, past: CalibrationDomain, options: DomainWeightOptions): number;
 export declare function ageWeight(at: string, halfLifeDays: number, now?: number): number;

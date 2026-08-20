@@ -99,3 +99,23 @@ J-Space lite + Router minimal-first 同时开启。
 - retained reasoning / native tool-result 只检测，不伪造。
 
 详见 [NATIVE_CANONICAL_MODE.md](NATIVE_CANONICAL_MODE.md)。
+
+## Rollout mode 与 augmentation profile 正交
+
+v0.8 新增：
+
+```text
+rolloutMode=single
+rolloutMode=verified-branching
+```
+
+它不是第五/第六种 augmentation profile。任意 Generator profile 理论上都可和 Verified Branching 组合，但首选研究组合是：
+
+```yaml
+augmentationProfile: native-canonical
+rolloutMode: verified-branching
+```
+
+这样可以保持 Generator protocol 固定，只测试 conditional resampling + selection 的增益。
+
+不要使用 Router Assist 的 tool-topology mutation 来人为制造 branch diversity；branch candidate 应共享同一个 Generator protocol fingerprint。

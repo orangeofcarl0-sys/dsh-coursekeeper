@@ -128,3 +128,21 @@ Verifier 不是连续反思层。次数耗尽后应报告 blocker，而不是无
 ## 8. Semantic Pass 何时失效
 
 如果 PASS 后出现新的正向 evidence/progress 或 workspace mutation，使当前证据状态改变，Semantic Verification 会重新变成 pending。旧 pass 不能自动覆盖新 revision。
+
+## v0.8：Absolute 与 Comparative Verifier 分离
+
+Coursekeeper 现在有两种 verifier role：
+
+```text
+Absolute Semantic Verifier
+  one candidate -> PASS/WARN/PATCH/FAIL_ROUTE/UNKNOWN
+
+Comparative Verifier
+  candidate A vs B -> a/b/tie/no_valid_candidate + scores
+```
+
+不要共用一个 prompt。
+
+Absolute Verifier 属于 completion/reroute gate；Comparative Verifier 只用于 Verified Branching candidate selection。Comparative winner 仍必须回 main workspace 经过 deterministic debt 和必要的 Absolute Semantic Verifier。
+
+同模型也可以承担 Comparative Verifier，但必须使用 fresh context，且默认不输入 Generator hidden CoT。这里的“独立”首先指 context/evidence framing 独立，不等同于 model weights 独立。

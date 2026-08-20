@@ -85,3 +85,75 @@ hybrid-assist
 ## 7. Repository URL
 
 自 v0.7.1 起项目主页迁移至 `orangeofcarl0-sys/dsh-coursekeeper`，`package.json` 的 `repository/homepage/bugs` 已同步指向新仓库。旧仓库 `chunsi-w/dsh-trajectory-governor` 仅保留历史版本。
+
+# v0.7.1 → v0.8.0
+
+## 默认行为
+
+v0.8 新增：
+
+```yaml
+rolloutMode: single
+```
+
+默认保持 `single`，因此安装 v0.8 不会自动创建额外 rollout、fork workspace 或 Comparative Verifier 调用。
+
+## 新的正交配置维度
+
+`augmentationProfile` 继续描述单 trajectory 的 Generator surface；`rolloutMode` 独立描述是否允许 Verified Branching。
+
+旧配置：
+
+```yaml
+augmentationProfile: native-canonical
+```
+
+在 v0.8 中行为不变，等价于：
+
+```yaml
+augmentationProfile: native-canonical
+rolloutMode: single
+```
+
+要实验 branching：
+
+```yaml
+augmentationProfile: native-canonical
+rolloutMode: verified-branching
+branchLearning: shadow
+```
+
+## 经验文件
+
+新增：
+
+```text
+$DSH_HOME/coursekeeper/branch-experiences-v1.jsonl
+```
+
+旧 `experiences-v1.jsonl` 不会被转换成 branch experience。v0.8 route CalibrationDomain 增加 `protocolFingerprint` 与 `rolloutMode`，因此旧经验不会无条件 full-weight 迁移。
+
+## Runtime provider
+
+v0.8 不假设 DSH 本身提供 workspace fork。自动 branching 需要外部注册：
+
+```text
+ctx.coursekeeperBranching.workspace
+ctx.coursekeeperBranching.executor
+```
+
+没有 provider 时插件仍可安全运行；branch trigger 只形成 suggestion。
+
+## 新工具
+
+只有 Verified Branching 默认暴露：
+
+```text
+coursekeeper_branch
+```
+
+`native-canonical` 会把该 auxiliary tool 放在 canonical业务工具之后，不改变 `bash -> read` 候选前缀。
+
+## 回滚
+
+从 v0.8 回滚 v0.7.1 时可保留 `branch-experiences-v1.jsonl`；旧版本不会读取它。删除/归档该文件只会清除 branch learning，不影响 route experience。

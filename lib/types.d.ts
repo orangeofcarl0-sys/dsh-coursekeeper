@@ -15,6 +15,13 @@ export type AugmentationProfile = 'governor' | 'jspace-assist' | 'router-assist'
 export type JSpaceAssistMode = 'off' | 'lite' | 'legacy';
 export type RouterAssistMode = 'off' | 'minimal-first' | 'task-aware';
 export type SemanticVerifierMode = 'off' | 'risk' | 'always';
+export type RolloutMode = 'single' | 'verified-branching';
+export type BranchLearningMode = 'off' | 'shadow' | 'active';
+export type BranchTriggerReason = 'fail-route' | 'no-progress' | 'low-route-margin' | 'semantic-unknown' | 'semantic-fail' | 'contaminated' | 'manual';
+export type BranchStatus = 'idle' | 'suggested' | 'collecting' | 'comparing' | 'selected' | 'no-valid-candidate' | 'applied' | 'blocked';
+export type WorkspaceForkCapability = 'none' | 'restart' | 'pre-mutation' | 'arbitrary';
+export type BranchCandidateOrigin = 'current' | 'fresh' | 'route-alternate' | 'external';
+export type ComparativeVerifierDecision = 'a' | 'b' | 'tie' | 'no_valid_candidate';
 export type SemanticVerificationStatus = 'not-required' | 'pending' | 'running' | 'passed' | 'warn' | 'failed' | 'unknown';
 export type ProgressKind = 'new-artifact-observed' | 'hypothesis-supported' | 'hypothesis-falsified' | 'acceptance-satisfied' | 'verification-satisfied' | 'benchmark-improved' | 'new-failure-mode' | 'constraint-established' | 'result-novel' | 'no-progress';
 export type RouteTransitionReason = 'insufficient-evidence' | 'coupling-discovered' | 'uncertainty-discovered' | 'falsifier-hit' | 'fail-route' | 'verifier-fail' | 'budget-exhausted' | 'converged' | 'challenger' | 'user-correction' | 'manual';
@@ -26,6 +33,8 @@ export interface CalibrationDomain {
     readonly augmentationProfile: AugmentationProfile;
     readonly harnessVersion: string;
     readonly policySchemaVersion: string;
+    readonly protocolFingerprint: string;
+    readonly rolloutMode: RolloutMode;
 }
 export interface TaskSignature {
     readonly version: 1;
@@ -111,6 +120,121 @@ export interface AdaptiveRouteDecision {
     readonly bayesian: Readonly<Partial<Record<Route, BayesianRouteEstimate>>>;
     readonly challengerEligible: boolean;
     readonly challenged: boolean;
+    readonly reason: string;
+}
+export interface GeneratorProtocolDescriptor {
+    readonly profile: string;
+    readonly fingerprint: string;
+}
+export interface VerifierProtocolDescriptor {
+    readonly profile: string;
+    readonly modelFamily: string;
+    readonly providerFamily: string;
+    readonly context: 'fresh';
+    readonly includesGeneratorReasoning: false;
+    readonly scoring?: 'structured' | 'fine-grained-logprob' | 'external';
+}
+export interface BranchEvidence {
+    readonly summary: string;
+    readonly artifacts: readonly string[];
+    readonly commands: readonly string[];
+    readonly outputs: readonly string[];
+    readonly unresolvedErrors: readonly string[];
+    readonly acceptanceSatisfied?: boolean;
+    readonly verificationPassed?: boolean;
+    readonly benchmarkPassed?: boolean;
+    readonly patch?: string;
+}
+export interface BranchCandidate {
+    readonly id: string;
+    readonly origin: BranchCandidateOrigin;
+    readonly route?: Route;
+    readonly workspaceRef?: string;
+    readonly fingerprint: string;
+    readonly evidence: BranchEvidence;
+    readonly createdAt: string;
+}
+export interface BranchCandidateAssessment {
+    readonly candidateId: string;
+    readonly verdict: 'pass' | 'fail' | 'unknown';
+    readonly score: number;
+    readonly reasons: readonly string[];
+}
+export interface ComparativeVerifierResult {
+    readonly decision: ComparativeVerifierDecision;
+    readonly scoreA: number;
+    readonly scoreB: number;
+    readonly confidence: number;
+    readonly criterionScores?: Readonly<Record<string, {
+        a: number;
+        b: number;
+    }>>;
+    readonly reason: string;
+}
+export interface BranchSelection {
+    readonly candidateId?: string;
+    readonly status: 'selected' | 'expand' | 'no-valid-candidate';
+    readonly margin: number;
+    readonly reason: string;
+}
+export interface BranchWaveState {
+    readonly id: number;
+    status: BranchStatus;
+    readonly startedAt: string;
+    readonly triggers: BranchTriggerReason[];
+    contamination: number;
+    checkpointKind: WorkspaceForkCapability;
+    checkpointRef?: string;
+    readonly candidates: Map<string, BranchCandidate>;
+    selectedCandidateId?: string;
+    selectionReason?: string;
+    comparisonCount: number;
+    verifierCalls: number;
+    wave: number;
+    requiresReverify: boolean;
+}
+export interface BranchEpisodeState {
+    wavesStarted: number;
+    current?: BranchWaveState;
+    lastOutcome?: 'not-used' | 'selected-original' | 'selected-alternate' | 'no-valid-candidate' | 'blocked';
+    lastTrigger?: BranchTriggerReason;
+}
+export interface BranchExperience {
+    readonly schemaVersion: 1;
+    readonly id: string;
+    readonly at: string;
+    readonly domain: CalibrationDomain;
+    readonly generatorProtocol: GeneratorProtocolDescriptor;
+    readonly verifierProtocol: VerifierProtocolDescriptor;
+    readonly task: TaskSignature;
+    readonly triggers: readonly BranchTriggerReason[];
+    readonly contamination: number;
+    readonly candidateCount: number;
+    readonly selectedOrigin?: BranchCandidateOrigin;
+    readonly selectedDifferentFromCurrent: boolean;
+    readonly finalReverifyPassed: boolean;
+    readonly useful: boolean;
+    readonly externalFailure: boolean;
+    readonly incrementalCost: {
+        readonly verifierCalls: number;
+        readonly branchCandidates: number;
+        readonly inputTokens?: number;
+        readonly cachedInputTokens?: number;
+        readonly reasoningTokens?: number;
+    };
+}
+export interface BayesianBranchEstimate {
+    readonly alpha: number;
+    readonly beta: number;
+    readonly mean: number;
+    readonly effectiveN: number;
+}
+export interface BranchTriggerDecision {
+    readonly eligible: boolean;
+    readonly triggers: readonly BranchTriggerReason[];
+    readonly contamination: number;
+    readonly calibratedProbability: number;
+    readonly effectiveSupport: number;
     readonly reason: string;
 }
 export interface TaskVector {
@@ -257,6 +381,7 @@ export interface EpisodeState {
     readonly resultFingerprints: Set<string>;
     benchmark: EpisodeBenchmarkState;
     semanticVerification: SemanticVerificationState;
+    branching: BranchEpisodeState;
     recoveryBlocker?: string;
     blockedReason?: string;
     effortOverride?: string;

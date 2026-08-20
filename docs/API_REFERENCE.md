@@ -164,3 +164,61 @@ GovernorState
 ## 9. 兼容约束
 
 `policySchemaVersion` 和 `RouteExperience.schemaVersion` 是持久化/校准语义的一部分。若以后改变 TaskSignature 字段含义、route signal attribution 或 bucket 逻辑，应提升相应 schema，并对旧经验降权或迁移。
+
+# v0.8 Verified Branching API
+
+公开 export：
+
+```text
+@orangeofcarl0-sys/dsh-coursekeeper/branching
+@orangeofcarl0-sys/dsh-coursekeeper/branching-store
+```
+
+主要函数：
+
+```text
+trajectoryContaminationScore
+branchTriggerDecision
+bayesianBranchEstimate
+sanitizeBranchEvidence
+branchCandidateFingerprint
+createBranchCandidate
+deduplicateCandidates
+assessCandidate
+deterministicPrefilter
+comparativeVerifierPrompt
+parseComparativeVerifierResult
+selectPair
+branchRingPairs
+branchPivotRoundPairs
+branchSoftWin
+buildBranchExperience
+```
+
+状态机接口：
+
+```text
+startBranchWave
+registerBranchCandidate
+recordBranchSelection
+recordNoValidBranchCandidate
+reopenAfterBranchApply
+```
+
+运行时类型：
+
+```text
+WorkspaceForkProvider
+BranchExecutor
+BranchRuntimeProvider
+ComparativeVerifierBackend
+BranchCandidate
+BranchEvidence
+ComparativeVerifierResult
+BranchExperience
+BranchTriggerDecision
+```
+
+`WorkspaceForkProvider` 与 `ComparativeVerifierBackend` 是注入点，不要求由 Coursekeeper 包自身实现具体 Git worktree/container provider。
+
+`reopenAfterBranchApply` 是 correctness boundary：任何 alternate winner apply 后，都必须从这里重新建立 main-workspace verification state，不能直接把 branch 内 evidence 搬成完成证明。

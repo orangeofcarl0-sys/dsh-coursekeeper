@@ -5,6 +5,7 @@ export declare const DEFAULT_FINISH_TOOL_NAMES: readonly ["finish"];
 export declare const COURSEKEEPER_CONTROL_TOOL = "coursekeeper_control";
 export declare const COURSEKEEPER_STATUS_TOOL = "coursekeeper_status";
 export declare const COURSEKEEPER_VERIFY_TOOL = "coursekeeper_semantic_verify";
+export declare const COURSEKEEPER_BRANCH_TOOL = "coursekeeper_branch";
 export declare const LEGACY_TRAJECTORY_CONTROL_TOOL = "trajectory_control";
 export declare const LEGACY_TRAJECTORY_STATUS_TOOL = "trajectory_policy_status";
 export declare const LEGACY_TRAJECTORY_VERIFY_TOOL = "trajectory_semantic_verify";

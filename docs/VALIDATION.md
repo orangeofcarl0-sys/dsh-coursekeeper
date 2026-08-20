@@ -20,7 +20,13 @@ Bayesian calibration
 bounded adjustment / support gate
 adaptive escalation
 challenger parsing / 调用边界
-zero-history v0.6 compatibility invariants
+zero-history v0.6/v0.7 compatibility invariants
+Verified Branching trigger/contamination/dedup/prefilter
+fresh-context comparative verifier prompt contract
+NO_VALID_CANDIDATE / selection gate
+winner apply 后 debt reopening
+BranchExperience protocol isolation / attribution
+branch evidence bounding / pivot-tournament helpers
 ```
 
 本地测试证明实现符合控制协议，不证明模型任务质量必然提高。
@@ -42,6 +48,16 @@ zero-history v0.6 compatibility invariants
 10. crossModelWeight=0 时换模型个人影响归零
 11. 四种 augmentationProfile 都受同一 completion gate
 12. 历史 trajectory_control session 可 replay
+13. rolloutMode=single 与 v0.7.1 行为一致，无 candidate/verifier 调用
+14. verified-branching 无 WorkspaceForkProvider 时只 suggestion，不修改 main workspace
+15. provider fork 的两个 candidate 确实来自同一 checkpoint 且 filesystem 隔离
+16. fresh candidate 不继承 Generator hidden CoT
+17. deterministic fail candidate 在 LLM verifier 前被过滤
+18. Bo2 margin 不足时只扩到 Bo3；N>=4 时 pivot tournament 调用数符合预算
+19. alternate winner apply 后 main workspace acceptance/verification debt 重新打开
+20. branch 内 pass 不能替代 main-workspace reverify
+21. NO_VALID_CANDIDATE 时 finish 被 recovery blocker 拦截
+22. branch-experiences-v1.jsonl 不含 raw objective/CoT/patch body
 ```
 
 ## 3. 需要额外测的 provider 差异
@@ -105,3 +121,42 @@ legacy trajectory_control replay
 7. blocker/verification 事件发生时才出现 event-driven steering。
 
 只有完成这些检查以后，Terminal-Bench A/B 才能解释为 protocol-fidelity 实验。
+
+
+## 6. Verified Branching 特有验证边界
+
+本地 65 项测试可以证明 branching **控制协议**，不能证明真实 DSH 已经具有任意 workspace fork。v0.8 源码要求外部 `WorkspaceForkProvider`。真实 E2E 必须另外证明：
+
+```text
+checkpoint 是稳定基线
+fork 之间互不写入
+executor 真的是 fresh context
+apply 只合并 winner
+dispose 不影响 main workspace
+provider 崩溃后 main workspace 仍一致
+```
+
+如果这些条件没有验证，不能把 `verified-branching` 的自动 workspace 模式标成 production-ready。
+
+Comparative Verifier 本地测试只证明 prompt 不主动包含 Generator CoT，并证明 parser/selection gate。same-model verifier 的实际 selection accuracy、logprob backend 增益和 Terminal-Bench Selected@N 必须用真实 provider 测量。
+
+## 7. Branching A/B 最低报告项
+
+每个 run 至少记录：
+
+```text
+Generator protocol fingerprint
+Verifier protocol profile/scoring
+Pass@1
+Oracle@N
+Selected@N
+branch trigger rate
+branch candidate count
+NO_VALID_CANDIDATE rate
+selected-alternate rate
+final main-workspace reverify pass rate
+comparative verifier calls
+uncached input / cached input / reasoning tokens
+```
+
+只有 `Selected@N` 提高但 final reverify 不提高时，不能声称真实任务质量提升。

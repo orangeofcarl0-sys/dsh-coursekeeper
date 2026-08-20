@@ -1,3 +1,20 @@
+# 0.8.0 — Verified Branching
+
+- 新增与 `augmentationProfile` 正交的 `rolloutMode: single | verified-branching`；默认 `single`，升级零额外 rollout 成本。
+- 新增 trajectory contamination、FAIL_ROUTE/no-progress/low-margin/semantic trigger 与 conservative branch eligibility。
+- 新增 progressive Bo2→Bo3；N>=4 使用 bounded pivot tournament。
+- 新增 `WorkspaceForkProvider` / `BranchExecutor` 抽象；无真实 provider 时只 suggestion，不在 main workspace 伪造并发分支。
+- 新增 candidate evidence sanitization、fingerprint/dedup 与 deterministic prefilter。
+- 新增 fresh-context Comparative Verifier；默认 evidence-only，不传 Generator hidden CoT，并允许 `NO_VALID_CANDIDATE`。
+- 支持外部 comparative backend 与 `structured / fine-grained-logprob / external` scoring 标记，不强绑定 Python verifier。
+- alternate winner 必须 apply 回 main workspace；apply 后重新打开 Acceptance / Verification / Benchmark / Semantic debt。
+- 新增 BranchExperience JSONL 与保守 Bayesian branch-usefulness calibration；按 protocol fingerprint / rollout mode 隔离经验。
+- 新增 `coursekeeper_branch` 工具、branch status、runtime capability 与 branch experience store 状态。
+- branch fork 在 winner/no-valid/abort/duplicate 后尽力清理；active collecting/comparing/selected wave 会阻塞 finish。
+- 新增 `docs/VERIFIED_BRANCHING_MODE.md` 与 `docs/BRANCHING_PROTOCOL.md`。
+- 本地控制测试扩展到 65 项。
+- 项目仓库迁移至 `orangeofcarl0-sys/dsh-coursekeeper`；npm 包 scope 更改为 `@orangeofcarl0-sys`（`repository/homepage/bugs`、`cordis.patch.yml` 与安装文档已同步）。
+
 # 0.7.1
 
 - 新增实验 `native-canonical` augmentation profile。
@@ -7,7 +24,6 @@
 - 正常 pre-step Coursekeeper policy 静默，仅保留事件驱动纠错。
 - 新增 request-level retained reasoning / linked tool-result 结构观测与 protocol fidelity 状态。
 - 新增 Native Canonical 实验文档与 3 项结构测试。
-- 项目仓库迁移至 `orangeofcarl0-sys/dsh-coursekeeper`；npm 包 scope 更改为 `@orangeofcarl0-sys`（`repository/homepage/bugs`、`cordis.patch.yml` 与安装文档已同步）。
 
 # Changelog
 

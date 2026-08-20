@@ -1,4 +1,4 @@
-import type { GovernorPolicyConfig, GovernorState, ProgressEvent, Route, AdaptiveRouteDecision, RouteTransitionReason, ToolSemantics } from './types.js';
+import type { GovernorPolicyConfig, GovernorState, ProgressEvent, Route, AdaptiveRouteDecision, RouteTransitionReason, ToolSemantics, BranchCandidate, BranchTriggerDecision, WorkspaceForkCapability } from './types.js';
 export interface StateOptions extends GovernorPolicyConfig {
     semanticVerifierMode?: 'off' | 'risk' | 'always';
     benchmarkRequired?: boolean;
@@ -9,6 +9,27 @@ export interface StateOptions extends GovernorPolicyConfig {
 export declare const DEFAULT_STATE_OPTIONS: StateOptions;
 export declare function createGovernorState(): GovernorState;
 export declare function acceptHumanTask(state: GovernorState, rawText: string, turn: number, planMode?: boolean, inputOptions?: Partial<StateOptions>): void;
+export declare function startBranchWave(state: GovernorState, decision: BranchTriggerDecision, checkpointKind: WorkspaceForkCapability, checkpointRef?: string): {
+    ok: boolean;
+    message: string;
+    waveId?: number;
+};
+export declare function registerBranchCandidate(state: GovernorState, candidate: BranchCandidate): {
+    ok: boolean;
+    message: string;
+    duplicateOf?: string;
+};
+export declare function recordBranchSelection(state: GovernorState, candidateId: string, reason: string): {
+    ok: boolean;
+    message: string;
+};
+export declare function recordNoValidBranchCandidate(state: GovernorState, reason: string): void;
+export declare function reopenAfterBranchApply(state: GovernorState, candidate: BranchCandidate, sequence?: number, inputOptions?: Partial<StateOptions>): {
+    ok: boolean;
+    message: string;
+    workspaceRevision: number;
+};
+export declare function settleBranchReverification(state: GovernorState, passed: boolean): void;
 export declare function openAcceptanceCount(state: GovernorState): number;
 export declare function openVerificationCount(state: GovernorState): number;
 export declare function benchmarkBlocker(state: GovernorState, inputOptions?: Partial<StateOptions>): string | undefined;

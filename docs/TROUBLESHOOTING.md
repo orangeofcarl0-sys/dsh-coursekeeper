@@ -133,3 +133,67 @@ Experience Memory / Bayesian calibration 自身是本地计算，通常不是 to
 先看 blocker 属于哪一层：Acceptance、Verification、Benchmark、Semantic、Recovery。
 
 如果是 Acceptance，确认工具事件是否能自动满足；语义性 obligation 可用 `accept` + 明确 evidence。若确实取消了要求，再使用 `waive`。不要 waive Verification Debt。
+
+## Verified Branching 常见问题
+
+### trigger eligible，但没有 candidate
+
+检查：
+
+```text
+coursekeeper_status.branching.runtimeAvailable
+```
+
+若为 `false`，说明没有 `WorkspaceForkProvider + BranchExecutor`。这是 suggestion-only 模式，不是故障。
+
+### 一直 collecting
+
+检查：
+
+```text
+candidate count
+maxCandidates
+verifierCalls
+selection margin
+```
+
+v0.8 在 candidate/verifier budget 到达后会转 `NO_VALID_CANDIDATE`，不应无限 collecting。若状态长期不变，优先检查外部 verifier promise/stream 是否没有返回。
+
+### Candidate 被立即过滤
+
+查看其：
+
+```text
+unresolvedErrors
+verificationPassed
+benchmarkPassed
+acceptanceSatisfied
+```
+
+显式 `false` 是 deterministic failure；未知状态应该省略字段，而不是填 `false`。
+
+### Alternate winner 选中了但不能 finish
+
+这是预期行为。必须：
+
+```text
+apply winner -> main workspace
+readback/test/build/benchmark
+semantic verify if required
+```
+
+Branch 内 tests 只参与 selection。
+
+### `NO_VALID_CANDIDATE`
+
+不要降低 `branchSelectionMinScore` 来强行拿一个 winner，先检查：
+
+- 是否所有 candidate 使用了同一错误假设；
+- candidate evidence 是否缺失；
+- generator 是否需要 reroute；
+- fork baseline 是否正确；
+- verifier criteria 是否适合任务。
+
+### Fork workspace 泄漏
+
+正常路径会调用 `dispose`。异常进程退出时应由 provider 自己用 TTL / worktree cleanup / container GC 兜底。

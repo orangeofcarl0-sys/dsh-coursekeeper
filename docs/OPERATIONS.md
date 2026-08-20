@@ -133,3 +133,45 @@ benchmarkToolNames: [run_benchmark]
 ```
 
 确保工具输出结构化、包含 benchmark identity、query count、recall、qps，以及影响可比性的 concurrency/warmup 等条件。
+
+## Verified Branching 运维
+
+### 默认成本
+
+`rolloutMode=single` 时：
+
+```text
+branch candidate calls = 0
+comparative verifier calls = 0
+workspace fork calls = 0
+```
+
+### 建议观察
+
+```text
+branch trigger rate
+runtimeAvailable
+candidate count / wave
+comparative verifier calls
+NO_VALID_CANDIDATE rate
+selected-alternate rate
+final reverify pass rate
+branch experience entries
+```
+
+### 临时 workspace 清理
+
+Provider 应把 `dispose()` 设计成幂等，并对进程异常退出准备自己的 TTL/垃圾回收。Coursekeeper 会在正常 winner/no-valid/abort/duplicate 路径调用 dispose，但无法保证进程被强杀后执行清理回调。
+
+### 成本上限
+
+推荐保持：
+
+```yaml
+branchInitialCandidates: 2
+branchMaxCandidates: 3
+maxBranchWavesPerEpisode: 1
+maxComparativeVerifierCalls: 8
+```
+
+先提高 selection quality，再考虑提高 N。不要用更大的 Best-of-N 掩盖 Generator protocol 本身的问题。

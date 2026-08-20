@@ -141,3 +141,29 @@ $DSH_HOME/coursekeeper/experiences-v1.jsonl
 ## 11. 隐私边界
 
 不保存原文不等于“完全匿名”。结构特征、hash、workspace fingerprint 仍可能构成本地可识别元数据。该文件应按本地开发日志处理，不应未经检查上传公共仓库。
+
+## v0.8：BranchExperience 与 RouteExperience 分开
+
+RouteExperience 回答：
+
+```text
+哪条 route 在相似任务上更容易成功？
+```
+
+BranchExperience 回答：
+
+```text
+遇到这种 trigger 时，额外 resample/selection 是否真的值得？
+```
+
+两者不共用 outcome label，也不写进同一个 JSONL。
+
+BranchExperience 默认：
+
+```text
+$DSH_HOME/coursekeeper/branch-experiences-v1.jsonl
+```
+
+`useful=true` 只在 alternate candidate 被选择且 main-workspace final reverify 成功时成立。这样不会因为 verifier“喜欢另一个候选”就错误奖励 branching。
+
+v0.8 的 CalibrationDomain 新增 `protocolFingerprint` 和 `rolloutMode`；默认 `crossProtocolWeight=0`，防止不同 Agent protocol 下的经验互相污染。

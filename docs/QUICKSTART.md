@@ -13,7 +13,7 @@ dsh --profile web --dump-config
 本地 tarball：
 
 ```bash
-dsh plugin --profile web add ./orangeofcarl0-sys-dsh-coursekeeper-0.7.1.tgz
+dsh plugin --profile web add ./orangeofcarl0-sys-dsh-coursekeeper-0.8.0.tgz
 dsh --profile web --dump-config
 ```
 
@@ -26,6 +26,7 @@ dsh --profile web --dump-config
 ```yaml
 mode: active
 augmentationProfile: governor
+rolloutMode: single
 capabilityControl: guard
 adaptiveReasoning: off
 adaptiveRouting: shadow
@@ -143,3 +144,20 @@ mode: shadow
 ```
 
 `mode: shadow` 与 `adaptiveRouting: shadow` 不同：前者是整个插件只观察；后者是 Coursekeeper 正常控制，但自适应路由只给建议。
+
+## Verified Branching 快速试用
+
+先确保普通 `single` 模式稳定，再开启：
+
+```yaml
+augmentationProfile: native-canonical
+rolloutMode: verified-branching
+branchLearning: shadow
+branchInitialCandidates: 2
+branchMaxCandidates: 3
+maxBranchWavesPerEpisode: 1
+```
+
+若没有安装 WorkspaceForkProvider，`coursekeeper_branch {"action":"evaluate"}` 仍能看到 trigger，但自动 branch 只会 suggestion。这是正常的安全降级。
+
+第一轮不要同时启用 `branchLearning=active`、`adaptiveRouting=active` 和 safe exploration。先测 `single` vs `verified-branching`。

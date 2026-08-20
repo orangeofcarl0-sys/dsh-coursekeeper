@@ -113,6 +113,7 @@ const COURSEKEEPER_AUX_TOOL_NAMES = new Set([
   'coursekeeper_control',
   'coursekeeper_status',
   'coursekeeper_semantic_verify',
+  'coursekeeper_branch',
   'trajectory_control',
   'trajectory_semantic_verify',
 ])

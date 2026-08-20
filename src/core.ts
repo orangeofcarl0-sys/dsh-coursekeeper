@@ -47,6 +47,7 @@ export const DEFAULT_FINISH_TOOL_NAMES = ['finish'] as const
 export const COURSEKEEPER_CONTROL_TOOL = 'coursekeeper_control'
 export const COURSEKEEPER_STATUS_TOOL = 'coursekeeper_status'
 export const COURSEKEEPER_VERIFY_TOOL = 'coursekeeper_semantic_verify'
+export const COURSEKEEPER_BRANCH_TOOL = 'coursekeeper_branch'
 export const LEGACY_TRAJECTORY_CONTROL_TOOL = 'trajectory_control'
 export const LEGACY_TRAJECTORY_STATUS_TOOL = 'trajectory_policy_status'
 export const LEGACY_TRAJECTORY_VERIFY_TOOL = 'trajectory_semantic_verify'

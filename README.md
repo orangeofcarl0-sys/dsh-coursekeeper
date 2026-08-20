@@ -1,31 +1,33 @@
-# DSH Coursekeeper v0.7.1
+# DSH Coursekeeper v0.8.0
 
 > DeepSeek Harness 的自校准闭环认知路线控制平面。原项目名：`dsh-trajectory-governor`。
 
-Coursekeeper 不训练新的 Router，也不依赖大规模轨迹数据。它以确定性路由为 cold-start 基线，在模型外维护 Route Contract、Commitment、Evidence、Acceptance / Verification Debt 与 Verifier 状态，再从正常使用产生的可归因事件中做**有界的个人校准**。
+Coursekeeper 是 DeepSeek Harness 的外部 Agent control plane。它以确定性路由为 cold-start 基线，在模型外维护 Route Contract、Commitment、Evidence、Acceptance / Verification Debt 与 Verifier 状态，并从正常使用产生的可归因事件中做**有界的个人校准**。v0.8 进一步加入可选 **Verified Branching**：单轨迹不值得继续修时，允许隔离重采样并由 fresh-context verifier 选择。
 
 一句话理解：
 
 ```text
-选路 → 守路 → 取证 → 验证 → 必要时换路 → 记录经验 → 下次只修正边界
+协议保真 → 选路 → 守路 → 取证 → 验证 → 必要时换路/重采样 → 主工作区复验 → 记录经验
 ```
 
 ## 1. 它解决什么问题
 
-普通 Agent 常见四类失败：
+普通 Agent 常见五类失败：
 
 - 路线选得不合适：简单任务过度规划，复杂任务直接开改；
 - 路线刚有一点不确定就切换，形成 branch churn；
 - “改过了”“想通了”被误当成“验证过了”；
-- 长期使用没有形成稳定个人偏好，或者需要昂贵的 learned router 才能适配。
+- 长期使用没有形成稳定个人偏好，或者需要昂贵的 learned router 才能适配；
+- 当前 trajectory 已被错误前提污染时，仍在同一上下文里不断修补。
 
-Coursekeeper 对应地做四件事：
+Coursekeeper 对应地做五件事：
 
 ```text
 Router        选择 DIRECT / INSPECT / PLAN / EXPLORE
 Committer     用 evidence budget 实现 route hysteresis
 Verifier      用债务、falsifier、benchmark 和独立语义验证控制完成/换路
 Calibrator    用个人 Episode 经验小幅修正路由边界和升级阈值
+Brancher      条件触发 fresh candidate，用证据 verifier 选择，再回主工作区复验
 ```
 
 它不是安全沙箱，也不替代 DSH 的 approval / sandbox / permission。
@@ -37,6 +39,7 @@ Calibrator    用个人 Episode 经验小幅修正路由边界和升级阈值
 ```yaml
 mode: active
 augmentationProfile: governor
+rolloutMode: single
 capabilityControl: guard
 adaptiveReasoning: off
 adaptiveRouting: shadow
@@ -53,7 +56,8 @@ safeExplorationRate: 0
 - 自适应路由只做 shadow 建议，不改变确定性 route；
 - 个人经验会记录，但不会在数据不足时“训练坏”路由；
 - 高风险、PLAN、EXPLORE、research 任务可要求独立 Semantic Verifier；
-- 不进行随机探索。
+- 不进行随机探索；
+- `rolloutMode: single`，因此升级到 v0.8 不会自动增加多 rollout 成本。
 
 ## 3. 四条 Route
 
@@ -130,10 +134,35 @@ base score
 | `jspace-assist` | lite | off | 测试额外 commitment induction |
 | `router-assist` | off | minimal-first | 测试首轮 interface shaping |
 | `hybrid-assist` | lite | minimal-first | 只用于有意识的实验 |
+| `native-canonical` | off | off | 协议保真实验：exact persona、稳定工具前缀、最小可见干预 |
 
 这些 profile 会进入 CalibrationDomain，经验不会被当作完全相同的数据。
 
-## 8. 安装
+## 8. Verified Branching（v0.8，实验）
+
+Verified Branching 与 `augmentationProfile` 正交：
+
+```yaml
+augmentationProfile: native-canonical
+rolloutMode: verified-branching
+```
+
+默认仍是 `single`。只有 `FAIL_ROUTE`、no-progress、低 route margin、Semantic Verifier `UNKNOWN/FAIL_ROUTE` 或高 trajectory contamination 等事件满足策略时才考虑分支。
+
+默认使用 progressive Bo2→Bo3：
+
+```text
+current trajectory + 1 fresh candidate
+-> deterministic prefilter
+-> fresh-context evidence verifier
+-> margin 不足才增加第 3 个 candidate
+```
+
+`N>=4` 时使用 bounded pivot tournament。Verifier 不读取 Generator hidden CoT，并允许返回 `NO_VALID_CANDIDATE`。Alternate winner 选中后必须应用回 main workspace，并重新打开 Acceptance / Verification / Benchmark / Semantic debt。
+
+自动 workspace branching 需要外部 `WorkspaceForkProvider`。若 runtime 没有真实 fork 能力，Coursekeeper 只记录 `branch/suggested`，不会在主 workspace 上伪造并行候选。详见 [Verified Branching](docs/VERIFIED_BRANCHING_MODE.md) 与 [Branching Runtime Protocol](docs/BRANCHING_PROTOCOL.md)。
+
+## 9. 安装
 
 要求：Node.js `^22.19.0 || >=24.0.0`；DSH peer range 为 `>=0.1.0-rc.5 <0.2.0`。
 
@@ -148,17 +177,17 @@ dsh --profile web --dump-config
 从 tarball：
 
 ```bash
-dsh plugin --profile web add ./orangeofcarl0-sys-dsh-coursekeeper-0.7.1.tgz
+dsh plugin --profile web add ./orangeofcarl0-sys-dsh-coursekeeper-0.8.0.tgz
 dsh --profile web --dump-config
 ```
 
 若包已发布到 npm，也可使用包名安装：
 
 ```bash
-dsh plugin --profile web add @orangeofcarl0-sys/dsh-coursekeeper@0.7.1
+dsh plugin --profile web add @orangeofcarl0-sys/dsh-coursekeeper@0.8.0
 ```
 
-## 9. 推荐上线顺序
+## 10. 推荐上线顺序
 
 第一阶段保持 `adaptiveRouting: shadow`。先观察 `coursekeeper_status` 中的 `baseRoute / adaptiveRoute / effectiveSupport / margin / routeTransitions`，确认 relation、route 与升级行为符合真实任务。
 
@@ -171,7 +200,7 @@ safeExplorationRate: 0
 
 不要同时开启 `hybrid-assist + phase adaptive reasoning + safe exploration`。应逐项做 A/B，否则无法判断收益和缓存/推理成本来自哪里。
 
-## 10. 模型可见工具
+## 11. 模型可见工具
 
 默认可注册：
 
@@ -179,22 +208,24 @@ safeExplorationRate: 0
 coursekeeper_control
 coursekeeper_status
 coursekeeper_semantic_verify
+coursekeeper_branch   # 仅 rolloutMode=verified-branching 且 exposeBranchTool=true
 ```
 
-`coursekeeper_control` 用于 commit / reroute / falsify / support / accept / waive；`coursekeeper_status` 是只读诊断；`coursekeeper_semantic_verify` 在确定性义务清理后运行独立语义验证。
+`coursekeeper_control` 用于 commit / reroute / falsify / support / accept / waive；`coursekeeper_status` 是只读诊断；`coursekeeper_semantic_verify` 在确定性义务清理后运行独立语义验证；`coursekeeper_branch` 管理 Verified Branching wave/candidate/select/apply。
 
-## 11. 本地数据
+## 12. 本地数据
 
 默认路径：
 
 ```text
 $DSH_HOME/coursekeeper/decisions.jsonl
 $DSH_HOME/coursekeeper/experiences-v1.jsonl
+$DSH_HOME/coursekeeper/branch-experiences-v1.jsonl
 ```
 
-`decisions.jsonl` 是审计 sidecar；`experiences-v1.jsonl` 是自校准经验。两者都不是模型历史，也不替代 DSH Session Events。
+`decisions.jsonl` 是审计 sidecar；`experiences-v1.jsonl` 是 route 自校准经验；`branch-experiences-v1.jsonl` 记录 branching 是否真正产生了可复验 uplift。它们都不是模型历史，也不替代 DSH Session Events。
 
-## 12. 文档入口
+## 13. 文档入口
 
 建议先读：
 
@@ -214,10 +245,12 @@ $DSH_HOME/coursekeeper/experiences-v1.jsonl
 - [验证边界](docs/VALIDATION.md)
 - [从 v0.6 迁移](docs/MIGRATION.md)
 - [源码 API](docs/API_REFERENCE.md)
+- [Verified Branching 模式](docs/VERIFIED_BRANCHING_MODE.md)
+- [Branching 运行时协议](docs/BRANCHING_PROTOCOL.md)
 
-## 13. 当前验证状态
+## 14. 当前验证状态
 
-当前项目的本地发布基线通过 TypeScript 编译与 51 项控制逻辑测试，并对最终 npm tarball 做过反向解包 smoke test。它证明的是**控制逻辑和打包完整性**，不是 provider 侧任务质量提升。
+当前项目的本地发布基线通过 TypeScript 编译与 65 项控制逻辑测试，并对最终 npm tarball 做过反向解包 smoke test。它证明的是**控制逻辑和打包完整性**，不是 provider 侧任务质量提升。
 
 真实 DSH/provider 环境仍应做 shadow → active 的 A/B 验证，尤其关注：route failure、wrong-first-hypothesis recovery、uncached input、额外 verifier/challenger 调用和 false blocker。
 

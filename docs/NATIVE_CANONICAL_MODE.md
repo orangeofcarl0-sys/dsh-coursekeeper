@@ -186,3 +186,16 @@ coursekeeper_status.protocolFidelity
 - retained reasoning / linked tool-result 的 request 结构观测。
 
 这些测试证明实现符合模式定义，不证明 Terminal-Bench 分数提升。
+
+## v0.8 与 Verified Branching 组合
+
+`native-canonical` 只定义 Generator protocol；v0.8 的 `rolloutMode` 是独立维度。
+
+推荐：
+
+```yaml
+augmentationProfile: native-canonical
+rolloutMode: verified-branching
+```
+
+所有 branch candidate 应保持同一个 native-canonical Generator protocol。Comparative Verifier 不使用该 persona/tool topology，而使用 fresh evidence-evaluator protocol。这样可以分别测 Generator protocol fidelity 与 rollout selection。

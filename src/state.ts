@@ -52,6 +52,9 @@ import type {
   TaskContract,
   ToolSemantics,
   TurnState,
+  BranchCandidate,
+  BranchTriggerDecision,
+  WorkspaceForkCapability,
 } from './types.js'
 
 export interface StateOptions extends GovernorPolicyConfig {
@@ -158,6 +161,7 @@ export function acceptHumanTask(state: GovernorState, rawText: string, turn: num
       resultFingerprints: new Set(),
       benchmark: benchmarkState(),
       semanticVerification: semanticVerificationState(contract, route, config.semanticVerifierMode),
+      branching: { wavesStarted: 0, lastOutcome: 'not-used' },
       kernelInjected: false,
     }
     state.noInformationStreak = 0
@@ -171,6 +175,7 @@ export function acceptHumanTask(state: GovernorState, rawText: string, turn: num
       const route = defaultRouteContract(contract, episode.route.revision + 1)
       episode.route = route
       episode.semanticVerification = semanticVerificationState(contract, route, config.semanticVerifierMode)
+      episode.branching.current = undefined
       episode.phase = phaseFor(contract, route, planMode)
       episode.recoveryBlocker = undefined
       episode.blockedReason = undefined
@@ -196,6 +201,118 @@ export function acceptHumanTask(state: GovernorState, rawText: string, turn: num
   for (const artifact of contract.artifacts) state.knownArtifacts.add(artifact)
   state.turn = createTurn(turn)
   refreshPolicyHint(state, config, true)
+}
+
+export function startBranchWave(
+  state: GovernorState,
+  decision: BranchTriggerDecision,
+  checkpointKind: WorkspaceForkCapability,
+  checkpointRef?: string,
+): { ok: boolean; message: string; waveId?: number } {
+  const episode = state.episode
+  if (!episode) return { ok: false, message: 'no active episode' }
+  if (!decision.eligible) return { ok: false, message: decision.reason }
+  if (episode.branching.current && ['collecting', 'comparing', 'selected'].includes(episode.branching.current.status)) {
+    return { ok: false, message: `branch wave ${episode.branching.current.id} is already active` }
+  }
+  episode.branching.wavesStarted++
+  const waveId = episode.branching.wavesStarted
+  episode.branching.current = {
+    id: waveId,
+    status: 'collecting',
+    startedAt: new Date().toISOString(),
+    triggers: [...decision.triggers],
+    contamination: decision.contamination,
+    checkpointKind,
+    ...(checkpointRef ? { checkpointRef } : {}),
+    candidates: new Map(),
+    comparisonCount: 0,
+    verifierCalls: 0,
+    wave: 1,
+    requiresReverify: false,
+  }
+  episode.branching.lastTrigger = decision.triggers[0]
+  return { ok: true, message: `branch wave ${waveId} started (${decision.triggers.join(', ')})`, waveId }
+}
+
+export function registerBranchCandidate(state: GovernorState, candidate: BranchCandidate): { ok: boolean; message: string; duplicateOf?: string } {
+  const wave = state.episode?.branching.current
+  if (!wave || !['collecting', 'comparing'].includes(wave.status)) return { ok: false, message: 'no branch wave is collecting candidates' }
+  for (const existing of wave.candidates.values()) {
+    if (existing.fingerprint === candidate.fingerprint) return { ok: false, message: `candidate ${candidate.id} duplicates ${existing.id}`, duplicateOf: existing.id }
+  }
+  wave.candidates.set(candidate.id, candidate)
+  return { ok: true, message: `candidate ${candidate.id} registered` }
+}
+
+export function recordBranchSelection(state: GovernorState, candidateId: string, reason: string): { ok: boolean; message: string } {
+  const wave = state.episode?.branching.current
+  if (!wave) return { ok: false, message: 'no active branch wave' }
+  if (!wave.candidates.has(candidateId)) return { ok: false, message: `unknown candidate ${candidateId}` }
+  wave.status = 'selected'
+  wave.selectedCandidateId = candidateId
+  wave.selectionReason = reason
+  wave.requiresReverify = true
+  return { ok: true, message: `selected ${candidateId}; apply then reverify before finish` }
+}
+
+export function recordNoValidBranchCandidate(state: GovernorState, reason: string): void {
+  const episode = state.episode
+  const wave = episode?.branching.current
+  if (!episode || !wave) return
+  wave.status = 'no-valid-candidate'
+  wave.selectionReason = reason
+  episode.branching.lastOutcome = 'no-valid-candidate'
+  episode.recoveryBlocker = `Verified branching found no valid candidate: ${reason}`
+  episode.phase = 'recover'
+}
+
+export function reopenAfterBranchApply(
+  state: GovernorState,
+  candidate: BranchCandidate,
+  sequence = 0,
+  inputOptions: Partial<StateOptions> = {},
+): { ok: boolean; message: string; workspaceRevision: number } {
+  const config = options(inputOptions)
+  const episode = state.episode
+  const wave = episode?.branching.current
+  if (!episode || !wave || wave.selectedCandidateId !== candidate.id) {
+    return { ok: false, message: 'selected branch candidate is not active', workspaceRevision: state.workspace.revision }
+  }
+  // A selected branch is only a search result. Applying it invalidates every
+  // previous completion claim on the main workspace and creates fresh debt.
+  for (const obligation of episode.acceptance.values()) {
+    if (obligation.status === 'waived') continue
+    obligation.status = 'open'
+    obligation.evidence.length = 0
+    obligation.selfAttested = false
+  }
+  const artifacts = [...new Set(candidate.evidence.artifacts.filter(Boolean))]
+  if (artifacts.length === 0) createWorkspaceMutationDebt(state.workspace, sequence)
+  else for (const artifact of artifacts) createVerificationDebtForArtifact(state.workspace, artifact, sequence)
+  episode.benchmark.currentRevisionPassed = undefined
+  episode.benchmark.blocker = config.benchmarkRequired ? `Branch winner applied at workspace revision ${state.workspace.revision}; rerun the required benchmark.` : undefined
+  episode.semanticVerification.status = episode.semanticVerification.required ? 'pending' : 'not-required'
+  episode.semanticVerification.verifiedWorkspaceRevision = undefined
+  episode.semanticVerification.decision = undefined
+  episode.semanticVerification.reason = episode.semanticVerification.required ? 'branch winner applied; fresh semantic verification required after deterministic obligations close' : undefined
+  episode.semanticVerification.contradictions = []
+  episode.semanticVerification.nextEvidence = []
+  episode.recoveryBlocker = undefined
+  episode.blockedReason = undefined
+  episode.phase = 'verify'
+  wave.status = 'applied'
+  wave.requiresReverify = true
+  episode.branching.lastOutcome = candidate.origin === 'current' ? 'selected-original' : 'selected-alternate'
+  refreshPolicyHint(state, config)
+  return { ok: true, message: `branch candidate ${candidate.id} applied; acceptance and verification debt reopened`, workspaceRevision: state.workspace.revision }
+}
+
+export function settleBranchReverification(state: GovernorState, passed: boolean): void {
+  const wave = state.episode?.branching.current
+  if (!wave || wave.status !== 'applied') return
+  wave.requiresReverify = !passed
+  if (passed) wave.status = 'applied'
 }
 
 export function openAcceptanceCount(state: GovernorState): number {
@@ -229,6 +346,9 @@ export function completionBlockers(state: GovernorState, inputOptions: Partial<S
     const current = semantic.verifiedWorkspaceRevision === state.workspace.revision
     if (!current || semantic.status !== 'passed') blockers.push(`Independent semantic verification remains: ${semantic.status}.`)
   }
+  const branchWave = state.episode?.branching.current
+  if (branchWave?.status === 'collecting' || branchWave?.status === 'comparing') blockers.push(`Verified branch wave ${branchWave.id} is still ${branchWave.status}; finish is blocked until it selects, aborts, or fails cleanly.`)
+  if (branchWave?.status === 'selected') blockers.push(`Branch candidate ${branchWave.selectedCandidateId ?? '(unknown)'} was selected but has not been applied to the main workspace.`)
   if (state.episode?.recoveryBlocker) blockers.push(state.episode.recoveryBlocker)
   if (state.episode && routeRequiresExplicitCommit(state.episode.route.route) && !state.episode.route.explicit) {
     blockers.push(`${state.episode.route.route.toUpperCase()} route was never explicitly committed.`)

@@ -22,6 +22,8 @@ export interface DomainWeightOptions {
   crossProfileWeight: number
   crossModelWeight: number
   stalePolicyWeight: number
+  crossProtocolWeight?: number
+  crossRolloutWeight?: number
 }
 
 export function domainWeight(current: CalibrationDomain, past: CalibrationDomain, options: DomainWeightOptions): number {
@@ -31,6 +33,8 @@ export function domainWeight(current: CalibrationDomain, past: CalibrationDomain
   if (current.augmentationProfile !== past.augmentationProfile) weight *= options.crossProfileWeight
   if (current.harnessVersion !== past.harnessVersion) weight *= 0.75
   if (current.policySchemaVersion !== past.policySchemaVersion) weight *= options.stalePolicyWeight
+  if (current.protocolFingerprint !== past.protocolFingerprint) weight *= options.crossProtocolWeight ?? 0
+  if (current.rolloutMode !== past.rolloutMode) weight *= options.crossRolloutWeight ?? 0.25
   return weight
 }
 

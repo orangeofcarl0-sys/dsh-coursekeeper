@@ -122,3 +122,42 @@ PLAN route was never explicitly committed.
 ## 9. 不应使用的绕过方式
 
 不要用 `waive` 代替失败 test；不要用 semantic verifier `force=true` 把未完成的 deterministic obligation 变成 PASS；不要仅凭模型复述结果手动 `accept` 一个本应由 artifact/test 证明的 obligation。
+
+## v0.8：Branch winner 不继承完成证明
+
+Verified Branching 明确区分三层证据：
+
+```text
+candidate-local evidence   用于 candidate selection
+selection verdict          用于决定哪个 candidate 值得 apply
+main-workspace evidence    唯一可清最终 completion debt 的证据
+```
+
+Alternate winner apply 后：
+
+```text
+Acceptance obligations reopen
+Verification Debt reopen
+Benchmark currentRevisionPassed invalidated
+Semantic Verification -> pending（若 required）
+```
+
+因此以下链条无效：
+
+```text
+branch candidate tests passed
+-> comparative verifier chose it
+-> finish
+```
+
+必须是：
+
+```text
+choose
+-> apply to main workspace
+-> readback/test/build/benchmark
+-> semantic verify if required
+-> finish
+```
+
+`collecting/comparing` branch wave 本身也是 completion blocker；`NO_VALID_CANDIDATE` 会建立 recovery blocker。

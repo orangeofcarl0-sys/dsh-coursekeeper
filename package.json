@@ -1,7 +1,7 @@
 {
   "name": "@orangeofcarl0-sys/dsh-coursekeeper",
-  "version": "0.7.1",
-  "description": "Self-calibrating cognitive course control for DeepSeek Harness with an experimental native-canonical protocol-fidelity mode.",
+  "version": "0.8.0",
+  "description": "Adaptive inference-time agent control for DeepSeek Harness with protocol fidelity, self-calibrating routing, and experimental Verified Branching.",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
@@ -30,6 +30,14 @@
     "./adaptive": {
       "types": "./lib/adaptive/index.d.ts",
       "default": "./lib/adaptive/index.js"
+    },
+    "./branching": {
+      "types": "./lib/branching.d.ts",
+      "default": "./lib/branching.js"
+    },
+    "./branching-store": {
+      "types": "./lib/branching-store.d.ts",
+      "default": "./lib/branching-store.js"
     }
   },
   "files": [

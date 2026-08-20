@@ -11,7 +11,7 @@
  * default guard mode) tool schemas. Model-visible steering is a tiny near-field control packet.
  */
 import type { Context } from '@deepseek-ai/cordis';
-import type { AdaptiveReasoningMode, AugmentationProfile, CapabilityControlMode, GovernorMode, JSpaceAssistMode, RouterAssistMode, SemanticVerifierMode, AdaptiveRoutingMode, AdaptiveEscalationMode, RouteChallengerMode, RiskLevel } from './types.js';
+import type { AdaptiveReasoningMode, AugmentationProfile, CapabilityControlMode, GovernorMode, JSpaceAssistMode, RouterAssistMode, SemanticVerifierMode, AdaptiveRoutingMode, AdaptiveEscalationMode, RouteChallengerMode, RiskLevel, RolloutMode, BranchLearningMode } from './types.js';
 export * from './core.js';
 export * from './debt.js';
 export * from './state.js';
@@ -19,10 +19,38 @@ export * from './types.js';
 export * from './verifier.js';
 export * from './profiles.js';
 export * from './adaptive/index.js';
+export * from './branching.js';
+export * from './branching-store.js';
 export declare const name = "coursekeeper";
 export declare const inject: string[];
 export interface Config {
     mode?: GovernorMode;
+    rolloutMode?: RolloutMode;
+    branchLearning?: BranchLearningMode;
+    branchExperienceMemory?: boolean;
+    branchExperiencePath?: string;
+    branchExperienceMaxEntries?: number;
+    branchInitialCandidates?: number;
+    branchMaxCandidates?: number;
+    branchPivots?: number;
+    maxBranchWavesPerEpisode?: number;
+    branchAutoStart?: boolean;
+    branchTriggerFailRoute?: boolean;
+    branchTriggerNoProgress?: boolean;
+    branchTriggerLowRouteMargin?: boolean;
+    branchTriggerSemanticUnknown?: boolean;
+    branchContaminationThreshold?: number;
+    branchMinProbability?: number;
+    branchSelectionMinScore?: number;
+    branchSelectionMargin?: number;
+    comparativeVerifierProvider?: string;
+    comparativeVerifierModel?: string;
+    comparativeVerifierMaxTokens?: number;
+    maxComparativeVerifierCalls?: number;
+    comparativeVerifierCriteria?: string[];
+    exposeBranchTool?: boolean;
+    crossProtocolWeight?: number;
+    crossRolloutWeight?: number;
     augmentationProfile?: AugmentationProfile;
     jspaceAssist?: JSpaceAssistMode;
     routerAssist?: RouterAssistMode;

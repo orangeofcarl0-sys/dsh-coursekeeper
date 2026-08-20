@@ -2,9 +2,9 @@
 
 ## 1. 设计目标
 
-Coursekeeper 是 Harness runtime control plane，不是模型、不训练神经 Router，也不是三套 Prompt 的叠加。权威控制状态放在模型外，模型只看到稳定 kernel 和一个很小的动态 control packet。
+Coursekeeper 是 Harness runtime control plane，不是模型、不训练神经 Router，也不是多套 Prompt 的叠加。权威控制状态放在模型外。`native-canonical` 进一步让正常步骤尽量看不到动态 Coursekeeper message；`verified-branching` 则把多 rollout 选择放在主 trajectory 之外。
 
-系统分为五个正交角色：
+系统分为六个正交角色：
 
 ```text
 Router       选择证据获取路线
@@ -12,9 +12,59 @@ Committer    控制路线切换迟滞
 Evidence     记录哪些事实/验证对哪个 revision 有效
 Verifier     控制 completion 与 route veto
 Calibrator   用个人历史有界修正路由边界
+Brancher     判断 repair vs resample，管理隔离 candidate 与 comparative selection
 ```
 
-## 2. 三种状态生命周期
+## 2. v0.8 分层
+
+```text
+Protocol Fidelity
+    |
+Native Cognitive Continuity
+    |
+Route / Commit / Falsify
+    |
+Single Rollout
+    |
+Trajectory Health
+    |
+    +-- Continue
+    +-- Reroute
+    +-- Verified Branching
+            |
+      Comparative Verifier
+            |
+      winner -> main workspace
+            |
+      Acceptance / Verification / Semantic reverify
+    |
+Personal Adaptation
+```
+
+关键边界：
+
+```text
+Generator Protocol != Verifier Protocol
+route failure       != trajectory contamination
+selection           != apply
+apply               != verification
+```
+
+`augmentationProfile` 控制单条 Generator trajectory；`rolloutMode` 控制是否允许额外 candidate。两者正交。
+
+### Generator Protocol
+
+`native-canonical` 可以固定 exact persona、候选工具前缀与低污染 message topology。Generator 允许保留自身 reasoning continuity。
+
+### Verifier Protocol
+
+Comparative Verifier 使用 fresh context，只看 task + candidate evidence，不继承 Generator hidden CoT。same-model verifier 仍与 Generator context 隔离。
+
+### Branch Runtime
+
+Coursekeeper 内核只编排 branch。真实 workspace 隔离由 `WorkspaceForkProvider` 提供。没有 provider 时只产生 suggestion，不在主 workspace 模拟并发。
+
+## 3. 三种状态生命周期
 
 ### WorkspaceState
 
@@ -59,7 +109,7 @@ blocker-report flag
 
 它防止验证续步或 call 状态跨 turn 污染。
 
-## 3. TaskContract
+## 4. TaskContract
 
 用户消息先被归一化成：
 
@@ -91,7 +141,7 @@ relation: new / continuation / extension / correction / clarification
 kind: build / fix / review / analysis / research / conversation / unknown
 ```
 
-## 4. Deterministic Router
+## 5. Deterministic Router
 
 四条 route 的 base score 由 TaskVector 计算。它不依赖个人数据，因此 cold-start 有稳定行为。
 
@@ -106,7 +156,7 @@ EXPLORE  偏好高 uncertainty / novelty、research
 
 v0.7 自适应层只修正 score，不改变安全 eligibility。
 
-## 5. RouteContract
+## 6. RouteContract
 
 每个 Episode 都有 RouteContract：
 
@@ -138,7 +188,7 @@ EXPLORE  2–5
 
 PLAN / EXPLORE 必须 explicit commit；DIRECT / INSPECT 可自动建立 contract。
 
-## 6. Commitment Hysteresis
+## 7. Commitment Hysteresis
 
 Commitment 不增加 reasoning budget。它只决定“现在能否换 route”。
 
@@ -155,7 +205,7 @@ user-correction
 
 这保证：路线不会因普通犹豫反复跳转；同时 falsifier 一旦命中，不会被 commitment 锁死。
 
-## 7. Evidence 与 Debt
+## 8. Evidence 与 Debt
 
 mutation 创建 artifact revision 和 Verification Debt。证据不是“模型说已经验证”，而是来自 durable tool result 的 readback/test/build/check 等事件。
 
@@ -168,7 +218,7 @@ Verification: 已经出现的修改是否被验证
 
 因此测试全绿但 feature 未实现，仍不能 finish；feature 已实现但未验证，也不能 finish。
 
-## 8. Semantic Verifier
+## 9. Semantic Verifier
 
 确定性义务优先。只有不能被 test/build/benchmark 完全覆盖的语义问题，才使用独立 verifier。
 
@@ -184,7 +234,7 @@ UNKNOWN
 
 `PATCH` 只替换工作假设，不惩罚 route；`FAIL_ROUTE` 才释放 route hysteresis 并形成强负 route signal。
 
-## 9. 自适应闭环
+## 10. 自适应闭环
 
 Episode 结束后产生 `RouteExperience`。下一任务执行：
 
@@ -209,7 +259,7 @@ TaskContract
 PATCH 不算 route failure
 ```
 
-## 10. Adaptive Escalation
+## 11. Adaptive Escalation
 
 Coursekeeper 更重视“何时升级”而不是一次四选一必须正确：
 
@@ -223,7 +273,7 @@ EXPLORE → PLAN            假设已 supported，进入实现收敛
 
 个人经验只允许把反复失败的升级阈值向“更早升级”移动；不会在小数据下自动学得更冒险、更晚升级。
 
-## 11. Cache 设计
+## 12. Cache 设计
 
 默认 `governor + guard + adaptiveReasoning=off`：
 

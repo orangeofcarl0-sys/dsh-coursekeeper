@@ -25,6 +25,7 @@ import {
   COURSEKEEPER_CONTROL_TOOL,
   COURSEKEEPER_STATUS_TOOL,
   COURSEKEEPER_VERIFY_TOOL,
+  COURSEKEEPER_BRANCH_TOOL,
   LEGACY_TRAJECTORY_CONTROL_TOOL,
   LEGACY_TRAJECTORY_VERIFY_TOOL,
   classifyTaskContract,
@@ -39,6 +40,9 @@ import {
   applyAdaptiveEscalation,
   blockerReport,
   completionBlockers,
+  openAcceptanceCount,
+  openVerificationCount,
+  benchmarkBlocker,
   createGovernorState,
   currentControlPacket,
   markHintInjected,
@@ -48,6 +52,11 @@ import {
   registerToolCall,
   settleToolCall,
   verificationPrompt,
+  startBranchWave,
+  registerBranchCandidate,
+  recordBranchSelection,
+  recordNoValidBranchCandidate,
+  reopenAfterBranchApply,
 } from './state.js'
 import type {
   AdaptiveReasoningMode,
@@ -66,6 +75,12 @@ import type {
   TaskSignature,
   RouteExperienceMetrics,
   Route,
+  RolloutMode,
+  BranchLearningMode,
+  BranchCandidate,
+  BranchTriggerDecision,
+  BranchExperience,
+  WorkspaceForkCapability,
 } from './types.js'
 import {
   applySemanticVerifierResult,
@@ -75,6 +90,21 @@ import {
 } from './verifier.js'
 import { applyNativeCanonicalProfile, applyRouterAssist, jspaceAssistKernel, observeRequestProtocol } from './profiles.js'
 import { DecisionLedger } from './ledger.js'
+import { BranchExperienceStore } from './branching-store.js'
+import {
+  branchTriggerDecision,
+  createBranchCandidate,
+  deterministicPrefilter,
+  comparativeVerifierPrompt,
+  parseComparativeVerifierResult,
+  selectPair,
+  buildBranchExperience,
+  trajectoryContaminationScore,
+  branchRingPairs,
+  branchPivotRoundPairs,
+  branchSoftWin,
+  type BranchRuntimeProvider,
+} from './branching.js'
 import {
   ExperienceStore,
   buildTaskSignature,
@@ -94,12 +124,40 @@ export * from './types.js'
 export * from './verifier.js'
 export * from './profiles.js'
 export * from './adaptive/index.js'
+export * from './branching.js'
+export * from './branching-store.js'
 
 export const name = 'coursekeeper'
 export const inject = ['agents', 'sessions', 'systemPrompt', 'tools', 'llm']
 
 export interface Config {
   mode?: GovernorMode
+  rolloutMode?: RolloutMode
+  branchLearning?: BranchLearningMode
+  branchExperienceMemory?: boolean
+  branchExperiencePath?: string
+  branchExperienceMaxEntries?: number
+  branchInitialCandidates?: number
+  branchMaxCandidates?: number
+  branchPivots?: number
+  maxBranchWavesPerEpisode?: number
+  branchAutoStart?: boolean
+  branchTriggerFailRoute?: boolean
+  branchTriggerNoProgress?: boolean
+  branchTriggerLowRouteMargin?: boolean
+  branchTriggerSemanticUnknown?: boolean
+  branchContaminationThreshold?: number
+  branchMinProbability?: number
+  branchSelectionMinScore?: number
+  branchSelectionMargin?: number
+  comparativeVerifierProvider?: string
+  comparativeVerifierModel?: string
+  comparativeVerifierMaxTokens?: number
+  maxComparativeVerifierCalls?: number
+  comparativeVerifierCriteria?: string[]
+  exposeBranchTool?: boolean
+  crossProtocolWeight?: number
+  crossRolloutWeight?: number
   augmentationProfile?: AugmentationProfile
   jspaceAssist?: JSpaceAssistMode
   routerAssist?: RouterAssistMode
@@ -157,6 +215,32 @@ export interface Config {
 
 export const Config: any = z.object({
   mode: z.union(['off', 'shadow', 'active'] as const).default('active'),
+  rolloutMode: z.union(['single', 'verified-branching'] as const).default('single'),
+  branchLearning: z.union(['off', 'shadow', 'active'] as const).default('shadow'),
+  branchExperienceMemory: z.boolean().default(true),
+  branchExperiencePath: z.string(),
+  branchExperienceMaxEntries: z.natural().min(16).default(2000),
+  branchInitialCandidates: z.natural().min(2).max(5).default(2),
+  branchMaxCandidates: z.natural().min(2).max(8).default(3),
+  branchPivots: z.natural().min(1).max(4).default(1),
+  maxBranchWavesPerEpisode: z.natural().min(1).max(4).default(1),
+  branchAutoStart: z.boolean().default(true),
+  branchTriggerFailRoute: z.boolean().default(true),
+  branchTriggerNoProgress: z.boolean().default(true),
+  branchTriggerLowRouteMargin: z.boolean().default(true),
+  branchTriggerSemanticUnknown: z.boolean().default(true),
+  branchContaminationThreshold: z.number().min(0).max(1).default(0.62),
+  branchMinProbability: z.number().min(0).max(1).default(0.45),
+  branchSelectionMinScore: z.number().min(0).max(1).default(0.55),
+  branchSelectionMargin: z.number().min(0).max(1).default(0.08),
+  comparativeVerifierProvider: z.string(),
+  comparativeVerifierModel: z.string(),
+  comparativeVerifierMaxTokens: z.natural().min(128).default(1536),
+  maxComparativeVerifierCalls: z.natural().min(1).default(8),
+  comparativeVerifierCriteria: z.array(z.string()).default(['acceptance', 'evidence', 'errors']),
+  exposeBranchTool: z.boolean().default(false),
+  crossProtocolWeight: z.number().min(0).max(1).default(0),
+  crossRolloutWeight: z.number().min(0).max(1).default(0.25),
   augmentationProfile: z.union(['governor', 'jspace-assist', 'router-assist', 'hybrid-assist', 'native-canonical'] as const).default('governor'),
   jspaceAssist: z.union(['off', 'lite', 'legacy'] as const).default('off'),
   routerAssist: z.union(['off', 'minimal-first', 'task-aware'] as const).default('off'),
@@ -214,6 +298,32 @@ export const Config: any = z.object({
 
 interface ResolvedConfig {
   mode: GovernorMode
+  rolloutMode: RolloutMode
+  branchLearning: BranchLearningMode
+  branchExperienceMemory: boolean
+  branchExperiencePath: string
+  branchExperienceMaxEntries: number
+  branchInitialCandidates: number
+  branchMaxCandidates: number
+  branchPivots: number
+  maxBranchWavesPerEpisode: number
+  branchAutoStart: boolean
+  branchTriggerFailRoute: boolean
+  branchTriggerNoProgress: boolean
+  branchTriggerLowRouteMargin: boolean
+  branchTriggerSemanticUnknown: boolean
+  branchContaminationThreshold: number
+  branchMinProbability: number
+  branchSelectionMinScore: number
+  branchSelectionMargin: number
+  comparativeVerifierProvider?: string
+  comparativeVerifierModel?: string
+  comparativeVerifierMaxTokens: number
+  maxComparativeVerifierCalls: number
+  comparativeVerifierCriteria: string[]
+  exposeBranchTool: boolean
+  crossProtocolWeight: number
+  crossRolloutWeight: number
   augmentationProfile: AugmentationProfile
   jspaceAssist: JSpaceAssistMode
   routerAssist: RouterAssistMode
@@ -280,6 +390,32 @@ function resolvedConfig(input: Config): ResolvedConfig {
   const profileRouter: RouterAssistMode = profile === 'router-assist' || profile === 'hybrid-assist' ? 'minimal-first' : 'off'
   return {
     mode: input.mode ?? 'active',
+    rolloutMode: input.rolloutMode ?? 'single',
+    branchLearning: input.branchLearning ?? 'shadow',
+    branchExperienceMemory: input.branchExperienceMemory ?? true,
+    branchExperiencePath: input.branchExperiencePath ?? join(dshHome, 'coursekeeper', 'branch-experiences-v1.jsonl'),
+    branchExperienceMaxEntries: input.branchExperienceMaxEntries ?? 2000,
+    branchInitialCandidates: input.branchInitialCandidates ?? 2,
+    branchMaxCandidates: Math.max(input.branchInitialCandidates ?? 2, input.branchMaxCandidates ?? 3),
+    branchPivots: input.branchPivots ?? 1,
+    maxBranchWavesPerEpisode: input.maxBranchWavesPerEpisode ?? 1,
+    branchAutoStart: input.branchAutoStart ?? true,
+    branchTriggerFailRoute: input.branchTriggerFailRoute ?? true,
+    branchTriggerNoProgress: input.branchTriggerNoProgress ?? true,
+    branchTriggerLowRouteMargin: input.branchTriggerLowRouteMargin ?? true,
+    branchTriggerSemanticUnknown: input.branchTriggerSemanticUnknown ?? true,
+    branchContaminationThreshold: input.branchContaminationThreshold ?? 0.62,
+    branchMinProbability: input.branchMinProbability ?? 0.45,
+    branchSelectionMinScore: input.branchSelectionMinScore ?? 0.55,
+    branchSelectionMargin: input.branchSelectionMargin ?? 0.08,
+    ...(input.comparativeVerifierProvider ? { comparativeVerifierProvider: input.comparativeVerifierProvider } : {}),
+    ...(input.comparativeVerifierModel ? { comparativeVerifierModel: input.comparativeVerifierModel } : {}),
+    comparativeVerifierMaxTokens: input.comparativeVerifierMaxTokens ?? 1536,
+    maxComparativeVerifierCalls: input.maxComparativeVerifierCalls ?? 8,
+    comparativeVerifierCriteria: input.comparativeVerifierCriteria ?? ['acceptance', 'evidence', 'errors'],
+    exposeBranchTool: input.exposeBranchTool ?? ((input.rolloutMode ?? 'single') === 'verified-branching'),
+    crossProtocolWeight: input.crossProtocolWeight ?? 0,
+    crossRolloutWeight: input.crossRolloutWeight ?? 0.25,
     augmentationProfile: profile,
     jspaceAssist: nativeCanonical ? 'off' : (input.jspaceAssist ?? profileJSpace),
     routerAssist: nativeCanonical ? 'off' : (input.routerAssist ?? profileRouter),
@@ -343,6 +479,8 @@ interface MutableEpisodeMetrics {
   verifierCalls: number
   routeChallenges: number
   recoveries: number
+  comparativeVerifierCalls: number
+  branchCandidates: number
   inputTokens?: number
   cachedInputTokens?: number
   reasoningTokens?: number
@@ -366,6 +504,10 @@ interface RuntimeState {
   externalFailure: boolean
   experienceRecordedEpisode?: number
   routeChallengeCount: number
+  branchVerifierInFlight: boolean
+  branchTrigger?: BranchTriggerDecision
+  branchRuntime?: BranchRuntimeProvider
+  branchExperienceRecordedWave?: number
   nativeCanonicalSurface?: {
     personaExact: boolean
     personaFirst: boolean
@@ -382,7 +524,7 @@ interface RuntimeState {
 }
 
 function newEpisodeMetrics(): MutableEpisodeMetrics {
-  return { requests: 0, steps: 0, toolCalls: 0, verifierCalls: 0, routeChallenges: 0, recoveries: 0 }
+  return { requests: 0, steps: 0, toolCalls: 0, verifierCalls: 0, routeChallenges: 0, recoveries: 0, comparativeVerifierCalls: 0, branchCandidates: 0 }
 }
 
 function normalizedFamily(value: unknown): string {
@@ -456,7 +598,9 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
   const modelInfo = new Map<string, Promise<any>>()
   const ledger = new DecisionLedger({ enabled: config.ledger, path: config.ledgerPath, maxBytes: config.maxLedgerBytes })
   const experienceStore = new ExperienceStore({ enabled: config.experienceMemory, path: config.experiencePath, maxInMemory: config.experienceMaxEntries })
+  const branchExperienceStore = new BranchExperienceStore({ enabled: config.branchExperienceMemory, path: config.branchExperiencePath, maxInMemory: config.branchExperienceMaxEntries })
   void experienceStore.ready()
+  void branchExperienceStore.ready()
 
   const stateOptions = () => ({
     maxDynamicHintChars: config.maxDynamicHintChars,
@@ -475,7 +619,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
     benchmarkToolNames: config.benchmarkToolNames,
     verificationToolNames: config.verificationToolNames,
     finishToolNames: config.finishToolNames,
-    controlToolNames: [COURSEKEEPER_CONTROL_TOOL, COURSEKEEPER_VERIFY_TOOL, LEGACY_TRAJECTORY_CONTROL_TOOL, LEGACY_TRAJECTORY_VERIFY_TOOL],
+    controlToolNames: [COURSEKEEPER_CONTROL_TOOL, COURSEKEEPER_VERIFY_TOOL, COURSEKEEPER_BRANCH_TOOL, LEGACY_TRAJECTORY_CONTROL_TOOL, LEGACY_TRAJECTORY_VERIFY_TOOL],
   })
 
   const stateFor = (agent: any): RuntimeState => {
@@ -486,7 +630,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
       : createGovernorState()
     runtime = {
       agent, governor, restrictionDenied: [], effortOverrideApplied: false, semanticVerifierInFlight: false,
-      metrics: newEpisodeMetrics(), externalFailure: false, routeChallengeCount: 0, suppressedVisiblePolicies: 0,
+      metrics: newEpisodeMetrics(), externalFailure: false, routeChallengeCount: 0, branchVerifierInFlight: false, suppressedVisiblePolicies: 0,
     }
     runtimeStates.set(agent, runtime)
     if (agent?.session) sessionStates.set(agent.session, runtime)
@@ -496,13 +640,23 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
     return runtime
   }
 
+  const generatorProtocolFingerprint = (runtime: RuntimeState): string => fingerprint(JSON.stringify({
+    profile: config.augmentationProfile,
+    assemblyHash: runtime.governor.assemblyHash ?? 'unobserved',
+    nativeToolSurface: runtime.nativeCanonicalSurface?.toolSurfaceHash ?? 'none',
+    nativePersonaExact: runtime.nativeCanonicalSurface?.personaExact ?? null,
+    nativeToolPrefix: runtime.nativeCanonicalSurface?.toolPrefix ?? [],
+  }))
+
   const domainFor = (runtime: RuntimeState): CalibrationDomain => ({
     providerFamily: normalizedFamily(runtime.lastProvider ?? runtime.agent?.options?.provider),
     modelFamily: normalizedFamily(runtime.lastModel ?? runtime.agent?.options?.model),
     modelRevision: config.modelRevision,
     augmentationProfile: config.augmentationProfile,
     harnessVersion: config.harnessVersion,
-    policySchemaVersion: 'coursekeeper-adaptive-v1',
+    policySchemaVersion: 'coursekeeper-adaptive-v2',
+    protocolFingerprint: generatorProtocolFingerprint(runtime),
+    rolloutMode: config.rolloutMode,
   })
 
   const metricsFor = (runtime: RuntimeState): RouteExperienceMetrics => ({
@@ -522,10 +676,12 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
   const finalizeExperience = (runtime: RuntimeState, forceCompletion?: 'success' | 'blocked' | 'abandoned' | 'unknown'): void => {
     const state = runtime.governor
     const episode = state.episode
-    if (!episode || runtime.experienceRecordedEpisode === episode.id || !config.experienceMemory) return
+    if (!episode) return
+    const completion = forceCompletion ?? inferCompletion(state, config.benchmarkRequired)
+    finalizeBranchExperience(runtime, completion === 'success')
+    if (runtime.experienceRecordedEpisode === episode.id || !config.experienceMemory) return
     const signature = runtime.taskSignature ?? buildTaskSignature(episode.contract, state.knownArtifacts)
     const domain = runtime.calibrationDomain ?? domainFor(runtime)
-    const completion = forceCompletion ?? inferCompletion(state, config.benchmarkRequired)
     const experience = buildRouteExperience(state, signature, domain, metricsFor(runtime), completion, runtime.externalFailure, config.benchmarkRequired)
     if (!experience) return
     experienceStore.append(experience)
@@ -537,6 +693,418 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
     })
   }
 
+  const verifierProtocolFor = (runtime: RuntimeState) => ({
+    profile: 'fresh-evidence-evaluator-v1',
+    providerFamily: normalizedFamily(config.comparativeVerifierProvider ?? runtime.lastProvider ?? runtime.agent?.options?.provider),
+    modelFamily: normalizedFamily(config.comparativeVerifierModel ?? runtime.lastModel ?? runtime.agent?.options?.model),
+    context: 'fresh' as const,
+    includesGeneratorReasoning: false as const,
+    scoring: ((ctx as any).coursekeeperComparativeVerifier?.scoring ?? 'structured') as 'structured' | 'fine-grained-logprob' | 'external',
+  })
+
+  const finalizeBranchExperience = (runtime: RuntimeState, finalReverifyPassed: boolean): void => {
+    const episode = runtime.governor.episode
+    const wave = episode?.branching.current
+    if (!episode || !wave || wave.candidates.size === 0 || runtime.branchExperienceRecordedWave === wave.id || !config.branchExperienceMemory) return
+    const signature = runtime.taskSignature ?? buildTaskSignature(episode.contract, runtime.governor.knownArtifacts)
+    const domain = runtime.calibrationDomain ?? domainFor(runtime)
+    const row = buildBranchExperience({
+      domain,
+      generatorProtocol: { profile: config.augmentationProfile, fingerprint: generatorProtocolFingerprint(runtime) },
+      verifierProtocol: verifierProtocolFor(runtime),
+      task: signature,
+      triggers: wave.triggers,
+      contamination: wave.contamination,
+      candidates: [...wave.candidates.values()],
+      selectedCandidateId: wave.selectedCandidateId,
+      finalReverifyPassed,
+      externalFailure: runtime.externalFailure,
+      verifierCalls: wave.verifierCalls,
+    })
+    branchExperienceStore.append(row)
+    runtime.branchExperienceRecordedWave = wave.id
+    ledger.record({
+      event: 'branch/experience', sessionId: runtime.agent?.id, episode: episode.id, wave: wave.id,
+      useful: row.useful, selectedOrigin: row.selectedOrigin ?? null, finalReverifyPassed,
+      triggers: row.triggers, candidateCount: row.candidateCount, domain: row.domain,
+    })
+  }
+
+  const currentBranchCandidate = (runtime: RuntimeState): BranchCandidate | undefined => {
+    const state = runtime.governor
+    const episode = state.episode
+    if (!episode) return undefined
+    const recent = episode.evidence.slice(-16).map(event => `${event.kind}: ${event.summary}`)
+    const candidate = createBranchCandidate({
+      id: `w${episode.branching.wavesStarted || 1}-current`,
+      origin: 'current',
+      route: episode.route.route,
+      evidence: {
+        summary: `Current main trajectory at route=${episode.route.route}, phase=${episode.phase}, workspaceRevision=${state.workspace.revision}.`,
+        artifacts: [...state.knownArtifacts],
+        commands: [],
+        outputs: recent,
+        unresolvedErrors: episode.recoveryBlocker ? [episode.recoveryBlocker] : [],
+        ...(openAcceptanceCount(state) === 0 ? { acceptanceSatisfied: true } : {}),
+        ...(openVerificationCount(state) === 0 ? { verificationPassed: true } : {}),
+        ...(benchmarkBlocker(state, stateOptions()) === undefined ? { benchmarkPassed: true } : {}),
+      },
+    })
+    return candidate
+  }
+
+  const resolveBranchRuntime = (runtime: RuntimeState): BranchRuntimeProvider | undefined => {
+    if (runtime.branchRuntime) return runtime.branchRuntime
+    const candidate = (ctx as any).coursekeeperBranching
+    if (candidate?.workspace?.checkpoint && candidate?.workspace?.fork && candidate?.workspace?.apply && candidate?.executor?.execute) {
+      runtime.branchRuntime = candidate as BranchRuntimeProvider
+      return runtime.branchRuntime
+    }
+    return undefined
+  }
+
+  const branchPolicyOptions = () => ({
+    enabled: config.rolloutMode === 'verified-branching',
+    triggerFailRoute: config.branchTriggerFailRoute,
+    triggerNoProgress: config.branchTriggerNoProgress,
+    triggerLowRouteMargin: config.branchTriggerLowRouteMargin,
+    triggerSemanticUnknown: config.branchTriggerSemanticUnknown,
+    contaminationThreshold: config.branchContaminationThreshold,
+    routeMarginThreshold: config.routeMarginThreshold,
+    minBranchProbability: config.branchMinProbability,
+    priorStrength: config.bayesianPriorStrength,
+    halfLifeDays: config.experienceHalfLifeDays,
+    crossProfileWeight: config.crossProfileWeight,
+    crossModelWeight: config.crossModelWeight,
+    stalePolicyWeight: config.stalePolicyWeight,
+    crossProtocolWeight: config.crossProtocolWeight,
+    crossRolloutWeight: config.crossRolloutWeight,
+  })
+
+  const evaluateBranchTrigger = async (runtime: RuntimeState): Promise<BranchTriggerDecision | undefined> => {
+    if (config.rolloutMode !== 'verified-branching' || !runtime.governor.episode) return undefined
+    await branchExperienceStore.ready()
+    const signature = runtime.taskSignature ?? buildTaskSignature(runtime.governor.episode.contract, runtime.governor.knownArtifacts)
+    const domain = runtime.calibrationDomain ?? domainFor(runtime)
+    // Shadow learning observes the calibrated decision but cannot suppress the
+    // deterministic cold-start branching policy. Active learning may suppress
+    // only weak/medium triggers; strong fail-route/contamination signals remain hard.
+    const calibrated = branchTriggerDecision(runtime.governor, signature, domain, branchExperienceStore.values(), branchPolicyOptions())
+    const base = branchTriggerDecision(runtime.governor, signature, domain, [], branchPolicyOptions())
+    const applied = config.branchLearning === 'active' ? calibrated : base
+    runtime.branchTrigger = applied
+    if (config.branchLearning === 'shadow') {
+      ledger.record({ event: 'branch/calibration-shadow', sessionId: runtime.agent?.id, episode: runtime.governor.episode.id, base, calibrated })
+    }
+    return applied
+  }
+
+  const runComparativeVerifier = async (
+    runtime: RuntimeState,
+    a: BranchCandidate,
+    b: BranchCandidate,
+    signal?: AbortSignal,
+  ) => {
+    const episode = runtime.governor.episode
+    if (!episode) return undefined
+    const external = (ctx as any).coursekeeperComparativeVerifier
+    const wave = episode.branching.current
+    if (runtime.branchVerifierInFlight || (wave && wave.verifierCalls >= config.maxComparativeVerifierCalls)) return undefined
+    if (external?.compare) {
+      runtime.branchVerifierInFlight = true
+      runtime.metrics.comparativeVerifierCalls++
+      if (wave) { wave.verifierCalls++; wave.comparisonCount++ }
+      try {
+        const raw = await external.compare({
+          objective: episode.contract.objective,
+          candidateA: a,
+          candidateB: b,
+          criteria: config.comparativeVerifierCriteria,
+          protocol: verifierProtocolFor(runtime),
+        }, signal)
+        if (typeof raw === 'string') return parseComparativeVerifierResult(raw)
+        if (raw && ['a', 'b', 'tie', 'no_valid_candidate'].includes(String(raw.decision))) return raw
+        return undefined
+      } catch (error) {
+        ledger.record({ event: 'branch/verifier-error', sessionId: runtime.agent?.id, episode: episode.id, backend: 'external', error: error instanceof Error ? error.message : String(error) })
+        return undefined
+      } finally {
+        runtime.branchVerifierInFlight = false
+      }
+    }
+    const provider = config.comparativeVerifierProvider ?? config.semanticVerifierProvider ?? runtime.lastProvider ?? runtime.agent?.options?.provider
+    const model = config.comparativeVerifierModel ?? config.semanticVerifierModel ?? runtime.lastModel ?? runtime.agent?.options?.model
+    if (!provider || !model) return undefined
+    runtime.branchVerifierInFlight = true
+    runtime.metrics.comparativeVerifierCalls++
+    if (wave) { wave.verifierCalls++; wave.comparisonCount++ }
+    let text = ''
+    try {
+      const stream = (ctx as any).llm.stream({
+        provider,
+        model,
+        system: 'You are a fresh-context comparative verifier. Judge execution evidence, not agent confidence or reasoning style. You may reject both candidates.',
+        messages: [{ role: 'user', content: [{ type: 'text', text: comparativeVerifierPrompt(episode.contract.objective, a, b, config.comparativeVerifierCriteria) }] }],
+        maxTokens: config.comparativeVerifierMaxTokens,
+      })
+      for await (const chunk of stream) {
+        if (signal?.aborted) break
+        if (chunk?.type === 'text-delta') text += String(chunk.text ?? '')
+        else if (chunk?.type === 'block-end' && chunk?.block?.type === 'text' && text.length === 0) text += String(chunk.block.text ?? '')
+      }
+      return parseComparativeVerifierResult(text)
+    } catch (error) {
+      ledger.record({ event: 'branch/verifier-error', sessionId: runtime.agent?.id, episode: episode.id, error: error instanceof Error ? error.message : String(error) })
+      return undefined
+    } finally {
+      runtime.branchVerifierInFlight = false
+    }
+  }
+
+  const alternateRouteForBranch = (runtime: RuntimeState): Route | undefined => {
+    const adaptive = runtime.governor.episode?.adaptive
+    if (!adaptive) return undefined
+    return [...adaptive.eligible]
+      .filter(route => route !== runtime.governor.episode?.route.route)
+      .sort((a, b) => (adaptive.fusedScores[b] ?? -Infinity) - (adaptive.fusedScores[a] ?? -Infinity))[0]
+  }
+
+  const generateBranchCandidate = async (
+    runtime: RuntimeState,
+    provider: BranchRuntimeProvider,
+    checkpoint: { capability: WorkspaceForkCapability; ref?: string; reason?: string },
+    index: number,
+  ): Promise<BranchCandidate | undefined> => {
+    const episode = runtime.governor.episode
+    const wave = episode?.branching.current
+    if (!episode || !wave) return undefined
+    const candidateId = `w${wave.id}-c${index}`
+    try {
+      const fork = await provider.workspace.fork(checkpoint, candidateId)
+      const route = index === 1 ? alternateRouteForBranch(runtime) : undefined
+      const raw = await provider.executor.execute({
+        candidateId,
+        workspaceRef: fork.workspaceRef,
+        objective: episode.contract.objective,
+        ...(route ? { route } : {}),
+        freshContext: true,
+        includeGeneratorReasoning: false,
+      })
+      const candidate = createBranchCandidate({ ...raw, id: candidateId, workspaceRef: fork.workspaceRef, origin: route ? 'route-alternate' : 'fresh', ...(route && !raw.route ? { route } : {}) })
+      runtime.metrics.branchCandidates++
+      const registered = registerBranchCandidate(runtime.governor, candidate)
+      ledger.record({ event: 'branch/candidate', sessionId: runtime.agent?.id, episode: episode.id, wave: wave.id, candidateId, registered, fingerprint: candidate.fingerprint, route: candidate.route ?? null })
+      if (!registered.ok) await provider.workspace.dispose?.(fork.workspaceRef)
+      return registered.ok ? candidate : undefined
+    } catch (error) {
+      ledger.record({ event: 'branch/candidate-error', sessionId: runtime.agent?.id, episode: episode.id, wave: wave.id, candidateId, error: error instanceof Error ? error.message : String(error) })
+      return undefined
+    }
+  }
+
+  const disposeBranchForks = async (runtime: RuntimeState): Promise<void> => {
+    const wave = runtime.governor.episode?.branching.current
+    const provider = resolveBranchRuntime(runtime)
+    if (!wave || !provider?.workspace.dispose) return
+    const refs = [...new Set([...wave.candidates.values()].map(candidate => candidate.workspaceRef).filter((ref): ref is string => Boolean(ref)))]
+    for (const ref of refs) {
+      try { await provider.workspace.dispose(ref) }
+      catch (error) { ledger.record({ event: 'branch/dispose-error', sessionId: runtime.agent?.id, episode: runtime.governor.episode?.id, workspaceRef: ref, error: error instanceof Error ? error.message : String(error) }) }
+    }
+  }
+
+  const applySelectedBranch = async (runtime: RuntimeState, candidate: BranchCandidate): Promise<boolean> => {
+    const episode = runtime.governor.episode
+    const wave = episode?.branching.current
+    if (!episode || !wave) return false
+    if (candidate.origin === 'current') {
+      wave.status = 'applied'
+      wave.requiresReverify = false
+      episode.branching.lastOutcome = 'selected-original'
+      episode.recoveryBlocker = undefined
+      ledger.record({ event: 'branch/original-retained', sessionId: runtime.agent?.id, episode: episode.id, wave: wave.id, candidateId: candidate.id })
+      await disposeBranchForks(runtime)
+      return true
+    }
+    const provider = resolveBranchRuntime(runtime)
+    if (!provider) return false
+    const applied = await provider.workspace.apply(candidate)
+    if (!applied.ok) {
+      wave.status = 'blocked'
+      episode.branching.lastOutcome = 'blocked'
+      episode.recoveryBlocker = `Selected branch candidate could not be applied: ${applied.reason ?? 'workspace provider rejected apply'}`
+      episode.phase = 'blocked'
+      return false
+    }
+    const appliedCandidate = applied.artifacts?.length
+      ? createBranchCandidate({ ...candidate, evidence: { ...candidate.evidence, artifacts: applied.artifacts } })
+      : candidate
+    const reopened = reopenAfterBranchApply(runtime.governor, appliedCandidate, 0, stateOptions())
+    ledger.record({ event: 'branch/applied', sessionId: runtime.agent?.id, episode: episode.id, wave: wave.id, candidateId: candidate.id, applied, reopened })
+    refreshRestriction(runtime)
+    if (reopened.ok) await disposeBranchForks(runtime)
+    return reopened.ok
+  }
+
+  const selectBranchCandidates = async (runtime: RuntimeState, signal?: AbortSignal): Promise<boolean> => {
+    const episode = runtime.governor.episode
+    const wave = episode?.branching.current
+    if (!episode || !wave || wave.candidates.size < 2) return false
+    wave.status = 'comparing'
+    const pre = deterministicPrefilter([...wave.candidates.values()])
+    if (pre.noValidCandidate) {
+      recordNoValidBranchCandidate(runtime.governor, 'all candidates failed deterministic prefilter')
+      ledger.record({ event: 'branch/no-valid-candidate', sessionId: runtime.agent?.id, episode: episode.id, wave: wave.id, stage: 'deterministic' })
+      await disposeBranchForks(runtime)
+      return false
+    }
+    if (pre.selectedCandidateId) {
+      const chosen = wave.candidates.get(pre.selectedCandidateId)!
+      recordBranchSelection(runtime.governor, chosen.id, 'sole deterministic survivor')
+      return applySelectedBranch(runtime, chosen)
+    }
+    const survivors = pre.survivors
+    if (survivors.length < 2) return false
+    if (survivors.length === 2) {
+      const result = await runComparativeVerifier(runtime, survivors[0]!, survivors[1]!, signal)
+      if (!result) { wave.status = 'collecting'; return false }
+      const selection = selectPair(survivors[0]!, survivors[1]!, result, { minScore: config.branchSelectionMinScore, margin: config.branchSelectionMargin })
+      ledger.record({ event: 'branch/comparison', sessionId: runtime.agent?.id, episode: episode.id, wave: wave.id, a: survivors[0]!.id, b: survivors[1]!.id, result, selection })
+      if (selection.status === 'selected' && selection.candidateId) {
+        const chosen = wave.candidates.get(selection.candidateId)!
+        recordBranchSelection(runtime.governor, chosen.id, selection.reason)
+        return applySelectedBranch(runtime, chosen)
+      }
+      if (selection.status === 'no-valid-candidate') {
+        recordNoValidBranchCandidate(runtime.governor, selection.reason)
+        await disposeBranchForks(runtime)
+        return false
+      }
+      if (wave.candidates.size >= config.branchMaxCandidates) {
+        recordNoValidBranchCandidate(runtime.governor, `selection remained ambiguous at candidate budget ${config.branchMaxCandidates}: ${selection.reason}`)
+        await disposeBranchForks(runtime)
+      } else wave.status = 'collecting'
+      return false
+    }
+    const compareAndAggregate = async (
+      pairs: Array<[BranchCandidate, BranchCandidate]>,
+      aggregate: Map<string, { evidenceScore: number; evidenceCount: number; wins: number; comparisons: number }>,
+      seen: Set<string>,
+    ): Promise<number> => {
+      let valid = 0
+      for (const [a, b] of pairs) {
+        const pairKey = [a.id, b.id].sort().join('\u0000')
+        if (seen.has(pairKey)) continue
+        seen.add(pairKey)
+        const result = await runComparativeVerifier(runtime, a, b, signal)
+        if (!result || result.decision === 'no_valid_candidate') continue
+        valid++
+        const softA = branchSoftWin(result.scoreA, result.scoreB)
+        const aa = aggregate.get(a.id) ?? { evidenceScore: 0, evidenceCount: 0, wins: 0, comparisons: 0 }
+        aa.evidenceScore += result.scoreA; aa.evidenceCount++; aa.wins += softA; aa.comparisons++; aggregate.set(a.id, aa)
+        const bb = aggregate.get(b.id) ?? { evidenceScore: 0, evidenceCount: 0, wins: 0, comparisons: 0 }
+        bb.evidenceScore += result.scoreB; bb.evidenceCount++; bb.wins += 1 - softA; bb.comparisons++; aggregate.set(b.id, bb)
+        ledger.record({ event: 'branch/comparison', sessionId: runtime.agent?.id, episode: episode.id, wave: wave.id, a: a.id, b: b.id, result })
+      }
+      return valid
+    }
+
+    const aggregate = new Map<string, { evidenceScore: number; evidenceCount: number; wins: number; comparisons: number }>()
+    const seen = new Set<string>()
+    let validComparisons = 0
+
+    if (survivors.length === 3) {
+      const pairs: Array<[BranchCandidate, BranchCandidate]> = []
+      for (let i = 0; i < survivors.length; i++) for (let j = i + 1; j < survivors.length; j++) pairs.push([survivors[i]!, survivors[j]!])
+      validComparisons += await compareAndAggregate(pairs, aggregate, seen)
+    } else {
+      // N>=4: bounded Probabilistic Pivot Tournament. The ring gives every
+      // candidate one A and one B slot; only empirical leaders become pivots.
+      validComparisons += await compareAndAggregate(branchRingPairs(survivors), aggregate, seen)
+      const ringRanked = survivors.map(candidate => {
+        const row = aggregate.get(candidate.id)
+        return { candidate, preference: row && row.comparisons ? row.wins / row.comparisons : 0.5 }
+      }).sort((a, b) => b.preference - a.preference || a.candidate.id.localeCompare(b.candidate.id))
+      const pivotIds = ringRanked.slice(0, Math.min(config.branchPivots, survivors.length)).map(row => row.candidate.id)
+      validComparisons += await compareAndAggregate(branchPivotRoundPairs(survivors, pivotIds), aggregate, seen)
+      ledger.record({ event: 'branch/pivot-tournament', sessionId: runtime.agent?.id, episode: episode.id, wave: wave.id, candidates: survivors.length, pivots: pivotIds, comparisons: seen.size })
+    }
+
+    if (validComparisons === 0 || aggregate.size === 0) {
+      recordNoValidBranchCandidate(runtime.governor, 'comparative verifier produced no valid candidate comparison')
+      await disposeBranchForks(runtime)
+      return false
+    }
+    const ranked = survivors.map(candidate => {
+      const row = aggregate.get(candidate.id)
+      return {
+        candidate,
+        preference: row && row.comparisons ? row.wins / row.comparisons : 0.5,
+        evidenceScore: row && row.evidenceCount ? row.evidenceScore / row.evidenceCount : 0,
+      }
+    }).sort((a, b) => b.preference - a.preference || b.evidenceScore - a.evidenceScore || a.candidate.id.localeCompare(b.candidate.id))
+    const best = ranked[0]!, second = ranked[1]
+    const margin = best.preference - (second?.preference ?? 0)
+    if (best.evidenceScore < config.branchSelectionMinScore) {
+      recordNoValidBranchCandidate(runtime.governor, `best evidence score ${best.evidenceScore.toFixed(3)} below minimum ${config.branchSelectionMinScore.toFixed(3)}`)
+      await disposeBranchForks(runtime)
+      return false
+    }
+    if (second && margin < config.branchSelectionMargin) {
+      if (wave.candidates.size >= config.branchMaxCandidates) {
+        recordNoValidBranchCandidate(runtime.governor, `selection margin ${margin.toFixed(3)} remained below ${config.branchSelectionMargin.toFixed(3)} at candidate budget ${config.branchMaxCandidates}`)
+        await disposeBranchForks(runtime)
+      } else wave.status = 'collecting'
+      return false
+    }
+    recordBranchSelection(runtime.governor, best.candidate.id, `verifier preference ${best.preference.toFixed(3)} evidence ${best.evidenceScore.toFixed(3)} margin ${margin.toFixed(3)}`)
+    return applySelectedBranch(runtime, best.candidate)
+  }
+
+  const maybeAutoBranch = async (runtime: RuntimeState, signal?: AbortSignal): Promise<void> => {
+    if (config.rolloutMode !== 'verified-branching' || !config.branchAutoStart || !runtime.governor.episode) return
+    const episode = runtime.governor.episode
+    if (episode.branching.wavesStarted >= config.maxBranchWavesPerEpisode) return
+    if (episode.branching.current && ['collecting', 'comparing', 'selected'].includes(episode.branching.current.status)) return
+    const decision = await evaluateBranchTrigger(runtime)
+    if (!decision?.eligible) return
+    const provider = resolveBranchRuntime(runtime)
+    if (!provider) {
+      ledger.record({ event: 'branch/suggested', sessionId: runtime.agent?.id, episode: episode.id, decision, runtimeAvailable: false })
+      return
+    }
+    let checkpoint
+    try {
+      checkpoint = await provider.workspace.checkpoint({ episodeId: episode.id, workspaceRevision: runtime.governor.workspace.revision, preferred: runtime.governor.workspace.revision === 0 ? 'pre-mutation' : 'restart' })
+    } catch (error) {
+      ledger.record({ event: 'branch/checkpoint-error', sessionId: runtime.agent?.id, episode: episode.id, error: error instanceof Error ? error.message : String(error) })
+      return
+    }
+    if (checkpoint.capability === 'none' || !checkpoint.ref) {
+      ledger.record({ event: 'branch/suggested', sessionId: runtime.agent?.id, episode: episode.id, decision, runtimeAvailable: true, checkpoint })
+      return
+    }
+    const started = startBranchWave(runtime.governor, decision, checkpoint.capability, checkpoint.ref)
+    if (!started.ok) return
+    const current = currentBranchCandidate(runtime)
+    if (current) registerBranchCandidate(runtime.governor, current)
+    const target = Math.max(2, Math.min(config.branchInitialCandidates, config.branchMaxCandidates))
+    for (let i = 1; i < target; i++) await generateBranchCandidate(runtime, provider, checkpoint, i)
+    let selected = await selectBranchCandidates(runtime, signal)
+    let count = runtime.governor.episode?.branching.current?.candidates.size ?? 0
+    while (!selected && runtime.governor.episode?.branching.current?.status === 'collecting' && count < config.branchMaxCandidates) {
+      const next = await generateBranchCandidate(runtime, provider, checkpoint, count)
+      if (!next) break
+      count = runtime.governor.episode?.branching.current?.candidates.size ?? count + 1
+      selected = await selectBranchCandidates(runtime, signal)
+    }
+    if (!selected && episode.branching.current?.status === 'collecting' && (episode.branching.current.candidates.size >= config.branchMaxCandidates || episode.branching.current.verifierCalls >= config.maxComparativeVerifierCalls)) {
+      recordNoValidBranchCandidate(runtime.governor, `branch budget exhausted without a confident winner (candidates=${episode.branching.current.candidates.size}, verifierCalls=${episode.branching.current.verifierCalls})`)
+      await disposeBranchForks(runtime)
+    }
+    ledger.record({ event: 'branch/wave-complete', sessionId: runtime.agent?.id, episode: episode.id, wave: episode.branching.current?.id ?? null, status: episode.branching.current?.status ?? null, candidates: episode.branching.current?.candidates.size ?? 0 })
+  }
+
   const resetEpisodeRuntime = (runtime: RuntimeState): void => {
     runtime.adaptivePreparedKey = undefined
     runtime.taskSignature = undefined
@@ -545,6 +1113,8 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
     runtime.externalFailure = false
     runtime.experienceRecordedEpisode = undefined
     runtime.routeChallengeCount = 0
+    runtime.branchTrigger = undefined
+    runtime.branchExperienceRecordedWave = undefined
     runtime.nativeCanonicalSurface = undefined
     runtime.nativeCanonicalBaselineToolHash = undefined
     runtime.protocolRequest = undefined
@@ -567,6 +1137,8 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
     crossProfileWeight: config.crossProfileWeight,
     crossModelWeight: config.crossModelWeight,
     stalePolicyWeight: config.stalePolicyWeight,
+    crossProtocolWeight: config.crossProtocolWeight,
+    crossRolloutWeight: config.crossRolloutWeight,
   })
 
   const runRouteChallenger = async (runtime: RuntimeState, signature: TaskSignature, decision: ReturnType<typeof decideAdaptiveRoute>): Promise<ReturnType<typeof decideAdaptiveRoute>> => {
@@ -622,6 +1194,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
       adaptiveRoute: decision.adaptiveRoute, appliedRoute: decision.appliedRoute, margin: decision.margin,
       support: decision.effectiveSupport, challenged: decision.challenged, reason: decision.reason,
     })
+    void maybeAutoBranch(runtime)
   }
 
   const maybeEscalate = (runtime: RuntimeState, sequence: number): void => {
@@ -635,6 +1208,8 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
       crossProfileWeight: config.crossProfileWeight,
       crossModelWeight: config.crossModelWeight,
       stalePolicyWeight: config.stalePolicyWeight,
+    crossProtocolWeight: config.crossProtocolWeight,
+    crossRolloutWeight: config.crossRolloutWeight,
     })
     if (!suggestion) return
     if (config.adaptiveRouting === 'shadow') {
@@ -718,6 +1293,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
         contradictions: result.contradictions, nextEvidence: result.nextEvidence,
         workspaceRevision: state.workspace.revision, applied: applied.message,
       })
+      if (result.decision === 'fail_route' || result.decision === 'unknown') void maybeAutoBranch(runtime, signal)
       return result.decision === 'pass'
     } catch (error) {
       semantic.status = 'unknown'
@@ -964,7 +1540,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
       case 'tool/call': {
         const toolName = String(event.data.name)
         // Coursekeeper control is applied synchronously by its own execute() for immediate feedback.
-        if (toolName === COURSEKEEPER_CONTROL_TOOL || toolName === LEGACY_TRAJECTORY_CONTROL_TOOL) break
+        if (toolName === COURSEKEEPER_CONTROL_TOOL || toolName === COURSEKEEPER_BRANCH_TOOL || toolName === LEGACY_TRAJECTORY_CONTROL_TOOL) break
         runtime.metrics.toolCalls++
         registerToolCall(state, String(event.data.callId), toolName, parseArguments(event.data.arguments), event.seq, stateOptions())
         break
@@ -981,6 +1557,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
         if (result) ledger.record({ event: 'tool/observed', sessionId: runtime.agent.id, seq: event.seq, callId, progress: result.kind, weight: result.weight, summary: result.summary, workspaceRevision: state.workspace.revision })
         refreshRestriction(runtime)
         maybeEscalate(runtime, event.seq)
+        void maybeAutoBranch(runtime)
         break
       }
       case 'tool/code-dispatch': {
@@ -988,6 +1565,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
         if (result) ledger.record({ event: 'tool/observed', sessionId: runtime.agent.id, seq: event.seq, progress: result.kind, weight: result.weight, summary: result.summary, workspaceRevision: state.workspace.revision })
         refreshRestriction(runtime)
         maybeEscalate(runtime, event.seq)
+        void maybeAutoBranch(runtime)
         break
       }
       case 'plan/mode':
@@ -1019,6 +1597,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
     const runtime = stateFor(agent)
     const state = runtime.governor
     if (state.planMode) return
+    await maybeAutoBranch(runtime, signal)
     let blockers = completionBlockers(state, stateOptions())
     if (blockers.length === 0) return
 
@@ -1102,10 +1681,128 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
     })))
   }
 
+  if (config.exposeBranchTool && config.rolloutMode === 'verified-branching') {
+    ctx.effect(() => (ctx as any).tools.register(defineTool({
+      name: COURSEKEEPER_BRANCH_TOOL,
+      description: 'Control Verified Branching: inspect/start a branch wave, register isolated candidate evidence, compare candidates, or confirm the selected candidate was applied. This tool never treats selection as final verification.',
+      parameters: {
+        action: { type: 'string', required: true, enum: ['evaluate', 'start', 'register', 'select', 'apply', 'abort', 'status'] },
+        candidate_id: { type: 'string' },
+        origin: { type: 'string', enum: ['current', 'fresh', 'route-alternate', 'external'] },
+        route: { type: 'string', enum: ['direct', 'inspect', 'plan', 'explore'] },
+        workspace_ref: { type: 'string' },
+        summary: { type: 'string' },
+        artifacts: { type: 'array', items: { type: 'string' } },
+        commands: { type: 'array', items: { type: 'string' } },
+        outputs: { type: 'array', items: { type: 'string' } },
+        unresolved_errors: { type: 'array', items: { type: 'string' } },
+        patch: { type: 'string' },
+        acceptance_satisfied: { type: 'boolean' },
+        verification_passed: { type: 'boolean' },
+        benchmark_passed: { type: 'boolean' },
+        confirmed_applied: { type: 'boolean', description: 'For manual/external apply only: assert that the selected alternate candidate has already been applied to the main workspace.' },
+        reason: { type: 'string' },
+      },
+      output: { schema: { type: 'string' }, render: (_args: any, value: any) => [{ type: 'text', text: value }] },
+      async execute(args: Record<string, any>, exec: any) {
+        const agent = exec.agent
+        if (!agent) return JSON.stringify({ ok: false, message: 'no owning agent' })
+        const runtime = stateFor(agent)
+        const state = runtime.governor
+        const episode = state.episode
+        if (!episode) return JSON.stringify({ ok: false, message: 'no active episode' })
+        const action = String(args.action ?? '')
+        if (action === 'evaluate') {
+          const decision = await evaluateBranchTrigger(runtime)
+          return JSON.stringify({ ok: true, decision, runtimeAvailable: Boolean(resolveBranchRuntime(runtime)), branching: episode.branching }, (_k, v) => v instanceof Map ? Object.fromEntries(v) : v, 2)
+        }
+        if (action === 'start') {
+          if (episode.branching.wavesStarted >= config.maxBranchWavesPerEpisode) return JSON.stringify({ ok: false, message: 'maximum branch waves reached for this episode' })
+          const evaluated = await evaluateBranchTrigger(runtime)
+          const decision: BranchTriggerDecision = evaluated?.eligible ? evaluated : {
+            eligible: true,
+            triggers: ['manual'],
+            contamination: trajectoryContaminationScore(state),
+            calibratedProbability: evaluated?.calibratedProbability ?? 0.5,
+            effectiveSupport: evaluated?.effectiveSupport ?? 0,
+            reason: String(args.reason ?? 'manual verified-branching request'),
+          }
+          let checkpoint: { capability: WorkspaceForkCapability; ref?: string; reason?: string } = { capability: 'none', reason: 'manual candidate collection' }
+          const provider = resolveBranchRuntime(runtime)
+          if (provider) {
+            try { checkpoint = await provider.workspace.checkpoint({ episodeId: episode.id, workspaceRevision: state.workspace.revision, preferred: state.workspace.revision === 0 ? 'pre-mutation' : 'restart' }) }
+            catch (error) { checkpoint = { capability: 'none', reason: error instanceof Error ? error.message : String(error) } }
+          }
+          const started = startBranchWave(state, decision, checkpoint.capability, checkpoint.ref)
+          if (started.ok) {
+            const current = currentBranchCandidate(runtime)
+            if (current) registerBranchCandidate(state, current)
+          }
+          return JSON.stringify({ ...started, checkpoint, branching: episode.branching }, (_k, v) => v instanceof Map ? Object.fromEntries(v) : v, 2)
+        }
+        if (action === 'register') {
+          const wave = episode.branching.current
+          if (!wave) return JSON.stringify({ ok: false, message: 'start a branch wave first' })
+          if (wave.candidates.size >= config.branchMaxCandidates) return JSON.stringify({ ok: false, message: `candidate budget exhausted (${config.branchMaxCandidates})` })
+          const candidateId = String(args.candidate_id ?? `w${wave.id}-external-${wave.candidates.size + 1}`)
+          const candidate = createBranchCandidate({
+            id: candidateId,
+            origin: args.origin ?? 'external',
+            ...(args.route ? { route: args.route } : {}),
+            ...(args.workspace_ref ? { workspaceRef: String(args.workspace_ref) } : {}),
+            evidence: {
+              summary: String(args.summary ?? ''),
+              artifacts: Array.isArray(args.artifacts) ? args.artifacts.map(String) : [],
+              commands: Array.isArray(args.commands) ? args.commands.map(String) : [],
+              outputs: Array.isArray(args.outputs) ? args.outputs.map(String) : [],
+              unresolvedErrors: Array.isArray(args.unresolved_errors) ? args.unresolved_errors.map(String) : [],
+              ...(typeof args.acceptance_satisfied === 'boolean' ? { acceptanceSatisfied: args.acceptance_satisfied } : {}),
+              ...(typeof args.verification_passed === 'boolean' ? { verificationPassed: args.verification_passed } : {}),
+              ...(typeof args.benchmark_passed === 'boolean' ? { benchmarkPassed: args.benchmark_passed } : {}),
+              ...(typeof args.patch === 'string' ? { patch: args.patch } : {}),
+            },
+          })
+          const result = registerBranchCandidate(state, candidate)
+          if (result.ok && candidate.origin !== 'current') runtime.metrics.branchCandidates++
+          return JSON.stringify({ ...result, candidate, candidateCount: wave.candidates.size }, null, 2)
+        }
+        if (action === 'select') {
+          const ok = await selectBranchCandidates(runtime)
+          return JSON.stringify({ ok, branching: episode.branching }, (_k, v) => v instanceof Map ? Object.fromEntries(v) : v, 2)
+        }
+        if (action === 'apply') {
+          const wave = episode.branching.current
+          const selected = wave?.selectedCandidateId ? wave.candidates.get(wave.selectedCandidateId) : undefined
+          if (!wave || !selected) return JSON.stringify({ ok: false, message: 'no selected candidate' })
+          if (selected.origin === 'current' || resolveBranchRuntime(runtime)) {
+            const ok = await applySelectedBranch(runtime, selected)
+            return JSON.stringify({ ok, branching: episode.branching, blockers: completionBlockers(state, stateOptions()) }, (_k, v) => v instanceof Map ? Object.fromEntries(v) : v, 2)
+          }
+          if (args.confirmed_applied !== true) return JSON.stringify({ ok: false, message: 'no WorkspaceForkProvider is installed; externally apply the selected candidate, then call apply with confirmed_applied=true' })
+          const reopened = reopenAfterBranchApply(state, selected, 0, stateOptions())
+          refreshRestriction(runtime)
+          return JSON.stringify({ ...reopened, branching: episode.branching, blockers: completionBlockers(state, stateOptions()) }, (_k, v) => v instanceof Map ? Object.fromEntries(v) : v, 2)
+        }
+        if (action === 'abort') {
+          if (episode.branching.current) {
+            episode.branching.current.status = 'blocked'
+            episode.branching.current.selectionReason = String(args.reason ?? 'branch wave aborted')
+            episode.branching.lastOutcome = 'blocked'
+            await disposeBranchForks(runtime)
+          }
+          return JSON.stringify({ ok: true, branching: episode.branching }, (_k, v) => v instanceof Map ? Object.fromEntries(v) : v, 2)
+        }
+        if (action === 'status') return JSON.stringify({ ok: true, branching: episode.branching, trigger: runtime.branchTrigger, runtimeAvailable: Boolean(resolveBranchRuntime(runtime)) }, (_k, v) => v instanceof Map ? Object.fromEntries(v) : v, 2)
+        return JSON.stringify({ ok: false, message: `unsupported branch action: ${action}` })
+      },
+      presentCall: () => ({ card: 'generic', title: 'Verified branching', kind: 'write' }),
+    })))
+  }
+
   if (config.exposeStatusTool) {
     ctx.effect(() => (ctx as any).tools.register(defineTool({
       name: COURSEKEEPER_STATUS_TOOL,
-      description: 'Read Coursekeeper route, commitment, adaptive calibration, obligations, progress, benchmark and verifier state.',
+      description: 'Read Coursekeeper route, commitment, adaptive calibration, Verified Branching, protocol, obligations, progress, benchmark and verifier state.',
       parameters: {},
       output: { schema: { type: 'string' }, render: (_args: any, value: any) => [{ type: 'text', text: value }] },
       async execute(_args: any, exec: any) {
@@ -1132,6 +1829,22 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
           adaptiveReasoning: config.adaptiveReasoning,
           adaptiveRouting: config.adaptiveRouting,
           adaptiveEscalation: config.adaptiveEscalation,
+          rolloutMode: config.rolloutMode,
+          branching: {
+            learning: config.branchLearning,
+            state: state.episode?.branching ?? null,
+            lastTrigger: runtime.branchTrigger ?? null,
+            contamination: state.episode ? trajectoryContaminationScore(state) : 0,
+            runtimeAvailable: Boolean(resolveBranchRuntime(runtime)),
+            comparativeVerifier: verifierProtocolFor(runtime),
+            generatorProtocol: { profile: config.augmentationProfile, fingerprint: generatorProtocolFingerprint(runtime) },
+            maxCandidates: config.branchMaxCandidates,
+            pivots: config.branchPivots,
+            maxWavesPerEpisode: config.maxBranchWavesPerEpisode,
+            autoStart: config.branchAutoStart,
+            deterministicPrefilter: true,
+            includeGeneratorReasoning: false,
+          },
           routeChallenger: { mode: config.routeChallenger, minRisk: config.routeChallengerMinRisk, maxPerEpisode: config.maxRouteChallengesPerEpisode },
           episode: state.episode?.id ?? null,
           humanRound: state.episode?.humanRound ?? 0,
@@ -1144,6 +1857,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
           taskSignature: runtime.taskSignature ?? null,
           calibrationDomain: runtime.calibrationDomain ?? null,
           experienceStore: experience,
+          branchExperienceStore: await branchExperienceStore.status(),
           phase: state.episode?.phase ?? null,
           risk: state.episode?.contract.risk ?? null,
           vector: state.episode?.contract.vector ?? null,
@@ -1174,6 +1888,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
     }
     runtimeStates.clear()
     await experienceStore.close()
+    await branchExperienceStore.close()
     await ledger.close()
   }, 'coursekeeper.lifecycle')
 
@@ -1189,6 +1904,13 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
     adaptiveReasoning: config.adaptiveReasoning,
     adaptiveRouting: config.adaptiveRouting,
     adaptiveEscalation: config.adaptiveEscalation,
+    rolloutMode: config.rolloutMode,
+    branchLearning: config.branchLearning,
+    branchAutoStart: config.branchAutoStart,
+    branchInitialCandidates: config.branchInitialCandidates,
+    branchMaxCandidates: config.branchMaxCandidates,
+    branchPivots: config.branchPivots,
+    maxBranchWavesPerEpisode: config.maxBranchWavesPerEpisode,
     routeChallenger: config.routeChallenger,
     experienceMemory: config.experienceMemory,
     benchmarkRequired: config.benchmarkRequired,

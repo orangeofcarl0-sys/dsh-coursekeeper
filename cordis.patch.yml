@@ -1,10 +1,27 @@
-# DSH Coursekeeper v0.7.1 — self-calibrating closed-loop cognitive course control.
+# DSH Coursekeeper v0.8.0 — adaptive inference-time control with optional Verified Branching.
 - insert:
     - id: coursekeeper
       name: '@orangeofcarl0-sys/dsh-coursekeeper'
       config:
         mode: active
         augmentationProfile: governor
+        rolloutMode: single
+        branchLearning: shadow
+        branchAutoStart: true
+        branchInitialCandidates: 2
+        branchMaxCandidates: 3
+        branchPivots: 1
+        maxBranchWavesPerEpisode: 1
+        branchExperienceMemory: true
+        branchExperienceMaxEntries: 2000
+        branchContaminationThreshold: 0.62
+        branchMinProbability: 0.45
+        branchSelectionMinScore: 0.55
+        branchSelectionMargin: 0.08
+        maxComparativeVerifierCalls: 8
+        comparativeVerifierCriteria: [acceptance, evidence, errors]
+        crossProtocolWeight: 0
+        crossRolloutWeight: 0.25
         jspaceAssist: off
         routerAssist: off
         semanticVerifier: risk

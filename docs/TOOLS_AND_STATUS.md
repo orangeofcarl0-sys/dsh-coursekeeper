@@ -151,3 +151,134 @@ ledger
 `semanticVerification.status=warn/unknown/failed`：Semantic gate 未清理。
 
 `openVerificationDebt` 中 artifactRevision 大于 readback/command 对应 revision：旧验证已 stale。
+
+## 5. `coursekeeper_branch`（v0.8）
+
+只在：
+
+```text
+rolloutMode=verified-branching
+exposeBranchTool=true
+```
+
+时注册。
+
+动作：
+
+| `action` | 用途 | 关键行为 |
+|---|---|---|
+| `evaluate` | 只计算 trigger | 不启动 workspace fork。 |
+| `start` | 开始 branch wave | 受 `maxBranchWavesPerEpisode`；有 provider 时尝试 checkpoint。 |
+| `register` | 注册 external/isolated candidate | 自动 fingerprint、evidence 截断、duplicate 拒绝、candidate budget 限制。 |
+| `select` | 比较现有 candidates | deterministic prefilter → pairwise/PPT comparative verifier。 |
+| `apply` | 应用已选 winner | alternate winner apply 后重新打开 completion debt。 |
+| `abort` | 放弃 wave | 标记 blocked，并释放可释放 fork。 |
+| `status` | 查看当前 wave | 不修改状态。 |
+
+`register` 常用字段：
+
+```text
+candidate_id
+origin
+route
+workspace_ref
+summary
+artifacts[]
+commands[]
+outputs[]
+unresolved_errors[]
+patch
+acceptance_satisfied
+verification_passed
+benchmark_passed
+```
+
+`apply` 在没有自动 WorkspaceForkProvider 时要求外部先真实应用 winner，再显式：
+
+```json
+{"action":"apply","confirmed_applied":true}
+```
+
+该 flag 不代表验证通过，只触发 main-workspace debt reopening。
+
+## 6. v0.8 `coursekeeper_status` 新字段
+
+```text
+rolloutMode
+branching
+  learning
+  state
+  lastTrigger
+  contamination
+  runtimeAvailable
+  comparativeVerifier
+  generatorProtocol
+  maxCandidates
+  pivots
+  maxWavesPerEpisode
+  autoStart
+  deterministicPrefilter
+  includeGeneratorReasoning=false
+branchExperienceStore
+```
+
+### `branching.state`
+
+主要字段：
+
+```text
+wavesStarted
+lastOutcome
+lastTrigger
+current
+  id
+  status
+  triggers
+  contamination
+  checkpointKind
+  checkpointRef
+  candidates
+  selectedCandidateId
+  selectionReason
+  comparisonCount
+  verifierCalls
+  requiresReverify
+```
+
+### `runtimeAvailable`
+
+`true` 只表示当前 Context 暴露了满足接口的 `coursekeeperBranching.workspace + executor`。
+
+它不证明 fork provider 的文件系统/容器语义正确；真实部署仍要做隔离测试。
+
+### 典型诊断
+
+```text
+lastTrigger.eligible=true + runtimeAvailable=false
+```
+
+表示 Coursekeeper 认为值得 branch，但当前 runtime 没有真实隔离执行能力，因此只会 suggestion。
+
+```text
+state.current.status=collecting
+```
+
+表示 candidate wave 尚未完成，finish 会被阻塞。
+
+```text
+state.current.status=selected
+```
+
+表示 winner 已选但还没应用回 main workspace。
+
+```text
+state.current.status=applied
+```
+
+表示已应用；此时真正的 blocker 应查看 Acceptance / Verification / Benchmark / Semantic debt。
+
+```text
+state.current.status=no-valid-candidate
+```
+
+表示 candidate/verifier 不能给出满足最低门槛的 winner；Episode 进入 recover。
