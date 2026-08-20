@@ -77,9 +77,6 @@
     "@deepseek-ai/dsh-tools": ">=0.1.0-rc.5 <0.2.0",
     "@deepseek-ai/schemastery": "^3.18.1"
   },
-  "dependencies": {
-    "@deepseek-ai/schemastery": "^3.18.1"
-  },
   "devDependencies": {
     "typescript": "^5.8.3"
   },
