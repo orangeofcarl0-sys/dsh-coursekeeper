@@ -222,3 +222,45 @@ BranchTriggerDecision
 `WorkspaceForkProvider` 与 `ComparativeVerifierBackend` 是注入点，不要求由 Coursekeeper 包自身实现具体 Git worktree/container provider。
 
 `reopenAfterBranchApply` 是 correctness boundary：任何 alternate winner apply 后，都必须从这里重新建立 main-workspace verification state，不能直接把 branch 内 evidence 搬成完成证明。
+
+## 10. v0.8-hotfix 新增模块
+
+### 运行时注册表
+
+`runtime-registry.ts`
+
+导出：
+
+`registerSessionHandle / getSessionHandle / unregisterSessionHandle`
+
+保存每个 Agent 会话的 Coursekeeper mode 与状态访问入口，供 host Remote service 读取。
+
+### Coursekeeper Remote Service
+
+`coursekeeper-service.ts`
+
+导出：
+
+`CoursekeeperService（TypertRemoteService，service=coursekeeper）`
+
+方法：
+
+`status(sessionId) / setMode(sessionId, mode)`
+
+Client 端通过 `ctx.remote[String.fromCharCode(36)+'mount'](TYPERT_REMOTE)` 挂载后直接调用。
+
+### 本地 WorkspaceForkProvider
+
+`workspace-fork-local.ts`
+
+导出：
+
+`LocalWorkspaceForkProvider / LocalBranchExecutor`
+
+配置见 CONFIGURATION 的 branchLocal* 字段。
+
+### SessionModeStore
+
+`session-mode-store.ts`
+
+持久化 per-session off/shadow/active 的 JSONL store，latest-wins。
