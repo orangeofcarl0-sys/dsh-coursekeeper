@@ -111,6 +111,7 @@ export interface Config {
     benchmarkRequired?: boolean;
     benchmarkToolNames?: string[];
     verificationToolNames?: string[];
+    verificationCommandPatterns?: string[];
     finishToolNames?: string[];
     fullBenchmarkMinQueries?: number;
     fullBenchmarkMinRecall?: number;

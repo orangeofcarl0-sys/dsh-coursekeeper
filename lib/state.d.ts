@@ -6,6 +6,7 @@ export interface StateOptions extends GovernorPolicyConfig {
     benchmarkRequired?: boolean;
     benchmarkToolNames?: readonly string[];
     verificationToolNames?: readonly string[];
+    verificationCommandPatterns?: readonly string[];
     finishToolNames?: readonly string[];
 }
 export declare const DEFAULT_STATE_OPTIONS: StateOptions;

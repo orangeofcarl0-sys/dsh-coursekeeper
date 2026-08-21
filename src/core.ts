@@ -433,6 +433,7 @@ function shellVerificationScope(command: string): readonly string[] | 'workspace
 export interface ToolClassificationOptions {
   readonly benchmarkToolNames?: readonly string[]
   readonly verificationToolNames?: readonly string[]
+  readonly verificationCommandPatterns?: readonly string[]
   readonly finishToolNames?: readonly string[]
   readonly controlToolNames?: readonly string[]
 }
@@ -463,7 +464,10 @@ export function classifyTool(name: string, rawArguments: unknown, options: ToolC
     if (command === 'view') effect = 'observe'
     else if (['create', 'str_replace', 'insert', 'undo_edit'].includes(command)) effect = 'mutate'
   } else if (SHELL_TOOLS.has(normalizedName)) {
-    if (operation && VERIFY_COMMAND_RE.test(operation)) { effect = 'verify'; verificationScope = shellVerificationScope(operation) }
+    const customVerify = (options.verificationCommandPatterns ?? []).some(pattern => {
+      try { return new RegExp(pattern, 'i').test(operation ?? '') } catch { return false }
+    })
+    if (operation && (VERIFY_COMMAND_RE.test(operation) || customVerify)) { effect = 'verify'; verificationScope = shellVerificationScope(operation) }
     else if (operation && OBSERVE_COMMAND_RE.test(operation)) effect = 'observe'
   } else if (INTERACT_TOOLS.has(normalizedName)) effect = 'interact'
   else if (DELEGATE_TOOLS.has(normalizedName) || normalizedName.startsWith('subagent')) effect = 'delegate'

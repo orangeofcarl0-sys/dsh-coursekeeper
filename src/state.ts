@@ -67,6 +67,7 @@ export interface StateOptions extends GovernorPolicyConfig {
   benchmarkRequired?: boolean
   benchmarkToolNames?: readonly string[]
   verificationToolNames?: readonly string[]
+  verificationCommandPatterns?: readonly string[]
   finishToolNames?: readonly string[]
 }
 
@@ -452,6 +453,7 @@ export function registerToolCall(state: GovernorState, callId: string, name: str
   const semantics = classifyTool(name, args, {
     benchmarkToolNames: config.benchmarkToolNames,
     verificationToolNames: config.verificationToolNames,
+    verificationCommandPatterns: config.verificationCommandPatterns,
     finishToolNames: config.finishToolNames,
     controlToolNames: [COURSEKEEPER_CONTROL_TOOL, LEGACY_TRAJECTORY_CONTROL_TOOL],
   })

@@ -55,6 +55,7 @@ export declare function controlPacket(contract: TaskContract, route: RouteContra
 export interface ToolClassificationOptions {
     readonly benchmarkToolNames?: readonly string[];
     readonly verificationToolNames?: readonly string[];
+    readonly verificationCommandPatterns?: readonly string[];
     readonly finishToolNames?: readonly string[];
     readonly controlToolNames?: readonly string[];
 }

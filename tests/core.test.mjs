@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   canSwitchRoute,
   classifyTaskContract,
+  classifyTool,
   controlPacket,
   createAcceptanceObligations,
   defaultRouteContract,
@@ -102,4 +103,10 @@ test('extractPathLike ignores non-file path-like tokens', () => {
   assert.ok(!vals.includes('GovernorMode\n'))
   assert.ok(!vals.includes('any\n'))
   assert.ok(!vals.includes('67/67'))
+})
+
+test('custom verification command patterns classify shell as verify', () => {
+  const sem = classifyTool('bash', { command: 'deno test src/a.ts' }, { verificationCommandPatterns: ['deno test'] })
+  assert.equal(sem.effect, 'verify')
+  assert.ok(sem.verificationScope.includes('src/a.ts'))
 })

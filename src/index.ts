@@ -229,6 +229,7 @@ export interface Config {
   benchmarkRequired?: boolean
   benchmarkToolNames?: string[]
   verificationToolNames?: string[]
+  verificationCommandPatterns?: string[]
   finishToolNames?: string[]
   fullBenchmarkMinQueries?: number
   fullBenchmarkMinRecall?: number
@@ -323,6 +324,7 @@ export const Config: any = z.object({
   benchmarkRequired: z.boolean().default(false),
   benchmarkToolNames: z.array(z.string()).default([...DEFAULT_BENCHMARK_TOOL_NAMES]),
   verificationToolNames: z.array(z.string()).default([...DEFAULT_VERIFICATION_TOOL_NAMES]),
+  verificationCommandPatterns: z.array(z.string()).default([]),
   finishToolNames: z.array(z.string()).default([...DEFAULT_FINISH_TOOL_NAMES]),
   fullBenchmarkMinQueries: z.natural().min(1).default(10_000),
   fullBenchmarkMinRecall: z.number().min(0).max(1).default(0.95),
@@ -417,6 +419,7 @@ interface ResolvedConfig {
   benchmarkRequired: boolean
   benchmarkToolNames: string[]
   verificationToolNames: string[]
+  verificationCommandPatterns: string[]
   finishToolNames: string[]
   fullBenchmarkMinQueries: number
   fullBenchmarkMinRecall: number
@@ -520,6 +523,7 @@ function resolvedConfig(input: Config): ResolvedConfig {
     benchmarkRequired: input.benchmarkRequired ?? false,
     benchmarkToolNames: input.benchmarkToolNames ?? [...DEFAULT_BENCHMARK_TOOL_NAMES],
     verificationToolNames: input.verificationToolNames ?? [...DEFAULT_VERIFICATION_TOOL_NAMES],
+    verificationCommandPatterns: input.verificationCommandPatterns ?? [],
     finishToolNames: input.finishToolNames ?? [...DEFAULT_FINISH_TOOL_NAMES],
     fullBenchmarkMinQueries: input.fullBenchmarkMinQueries ?? 10_000,
     fullBenchmarkMinRecall: input.fullBenchmarkMinRecall ?? 0.95,
@@ -681,6 +685,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
     benchmarkRequired: config.benchmarkRequired,
     benchmarkToolNames: config.benchmarkToolNames,
     verificationToolNames: config.verificationToolNames,
+    verificationCommandPatterns: config.verificationCommandPatterns,
     finishToolNames: config.finishToolNames,
     semanticVerifierMode: config.semanticVerifier,
     semanticVerifierFailOpen: config.semanticVerifierFailOpen,
@@ -718,6 +723,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
   const classifyExecution = (execution: any) => classifyTool(execution.name, parseArguments(execution.arguments ?? {}), {
     benchmarkToolNames: config.benchmarkToolNames,
     verificationToolNames: config.verificationToolNames,
+    verificationCommandPatterns: config.verificationCommandPatterns,
     finishToolNames: config.finishToolNames,
     controlToolNames: [COURSEKEEPER_CONTROL_TOOL, COURSEKEEPER_VERIFY_TOOL, COURSEKEEPER_BRANCH_TOOL, LEGACY_TRAJECTORY_CONTROL_TOOL, LEGACY_TRAJECTORY_VERIFY_TOOL],
   })
