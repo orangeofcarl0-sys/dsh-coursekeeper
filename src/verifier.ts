@@ -68,9 +68,23 @@ export function verifierPrompt(packet: EvidencePacket): string {
   ].join('\n')
 }
 
+function jsonCandidates(text: string): string[] {
+  const trimmed = text.trim()
+  if (!trimmed) return []
+  const candidates = [trimmed]
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(trimmed)
+  if (fenced?.[1]?.trim()) candidates.push(fenced[1].trim())
+  const first = trimmed.indexOf('{')
+  const last = trimmed.lastIndexOf('}')
+  if (first >= 0 && last > first) candidates.push(trimmed.slice(first, last + 1))
+  return candidates
+}
+
 export function parseSemanticVerifierResult(text: string): SemanticVerifierResult | undefined {
   let parsed: unknown
-  try { parsed = JSON.parse(text.trim()) } catch { return undefined }
+  for (const candidate of jsonCandidates(text)) {
+    try { parsed = JSON.parse(candidate); break } catch { /* try the next candidate */ }
+  }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined
   const record = parsed as Record<string, unknown>
   const decision = String(record['decision'] ?? '') as SemanticVerifierDecision

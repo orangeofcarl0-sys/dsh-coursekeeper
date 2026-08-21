@@ -1,3 +1,11 @@
+# 0.8.0-hotfix — stale debt closure, status crash guard, verifier output tolerance
+
+- 修复陈旧修订 verification debt（artifactRevision < current）无闭合路径并永久阻塞 finish 的问题：debtSatisfied 将被更新修订替代的债务视为已闭合，pruneVerificationDebts 随即清除。
+- 修复 coursekeeper_status 在未注入 coursekeeperBranching 的运行时崩溃：resolveBranchRuntime 对可选宿主能力做 try/catch 保护。
+- 语义验证器流式收集增加 finish 块兜底；空输出与不可解析输出分开记账（semantic-verifier/empty 与 unparseable），错误原因可归因。
+- parseSemanticVerifierResult 容忍 markdown code fence 与前后杂讯。
+- 本地控制测试扩展到 67 项。
+
 # 0.8.0 — Verified Branching
 
 - 新增与 `augmentationProfile` 正交的 `rolloutMode: single | verified-branching`；默认 `single`，升级零额外 rollout 成本。

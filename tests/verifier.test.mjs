@@ -61,3 +61,13 @@ test('semantic PATCH preserves route while replacing hypothesis; FAIL_ROUTE rele
   assert.equal(failed.rerouteAllowed, true)
   assert.equal(state.episode.route.epistemic, 'contradicted')
 })
+
+test('parser tolerates markdown fences and surrounding prose', () => {
+  const passJson = JSON.stringify({ decision: 'pass', failedObligations: [], contradictions: [], nextEvidence: [], reason: 'ok' })
+  const fenced = parseSemanticVerifierResult(['```json', passJson, '```'].join(String.fromCharCode(10)))
+  assert.equal(fenced.decision, 'pass')
+  const wrapped = parseSemanticVerifierResult('independent check: {"decision":"warn","failedObligations":[],"contradictions":[],"nextEvidence":["rerun"],"reason":"weak"}')
+  assert.equal(wrapped.decision, 'warn')
+  assert.equal(wrapped.nextEvidence[0], 'rerun')
+  assert.equal(parseSemanticVerifierResult(''), undefined)
+})

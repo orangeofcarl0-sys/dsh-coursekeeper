@@ -78,7 +78,13 @@ export function debtSatisfied(workspace: WorkspaceState, debt: VerificationDebt)
     return !debt.requiresCommand || (debt.commandRevision ?? -1) >= debt.workspaceRevision
   }
   const current = artifactState(workspace, debt.artifact).revision
-  if (current !== debt.artifactRevision) return false
+    // A verification debt pins exactly one revision of one artifact. Once the
+    // artifact has advanced past that revision, the old debt can never be
+    // satisfied against the current content and no longer gates completion:
+    // the newer revision has (or will get) its own debt. Treat superseded
+    // debts as closed here; pruneVerificationDebts removes them from the set.
+    if (current > debt.artifactRevision) return true
+    if (current !== debt.artifactRevision) return false
   const readback = !debt.requiresReadback || (debt.readbackRevision ?? -1) >= current
   const command = !debt.requiresCommand || (debt.commandRevision ?? -1) >= current
   return readback && command

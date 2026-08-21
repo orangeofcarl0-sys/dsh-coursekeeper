@@ -755,7 +755,14 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
 
   const resolveBranchRuntime = (runtime: RuntimeState): BranchRuntimeProvider | undefined => {
     if (runtime.branchRuntime) return runtime.branchRuntime
-    const candidate = (ctx as any).coursekeeperBranching
+    let candidate: any
+    try {
+      // coursekeeperBranching is an optional host capability, not a required
+      // cordis injection: accessing an uninjected context property throws.
+      candidate = (ctx as any).coursekeeperBranching
+    } catch {
+      candidate = undefined
+    }
     if (candidate?.workspace?.checkpoint && candidate?.workspace?.fork && candidate?.workspace?.apply && candidate?.executor?.execute) {
       runtime.branchRuntime = candidate as BranchRuntimeProvider
       return runtime.branchRuntime
@@ -1258,8 +1265,30 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
       })
       for await (const chunk of stream) {
         if (signal?.aborted) break
-        if (chunk?.type === 'text-delta') text += String(chunk.text ?? '')
-        else if (chunk?.type === 'block-end' && chunk?.block?.type === 'text' && text.length === 0) text += String(chunk.block.text ?? '')
+        if (chunk?.type === 'text-delta') {
+          text += String(chunk.text ?? '')
+        } else if (text.length === 0) {
+          // Some runtimes emit no text-delta on failure and fold the
+          // terminal state into a finish block; capture its text so the
+          // failure is at least attributable instead of silently empty.
+          if (chunk?.type === 'block-end' && chunk?.block?.type === 'text') text += String(chunk.block.text ?? '')
+          else if (chunk?.type === 'finish') {
+            const finishText = typeof chunk.text === 'string' ? chunk.text
+              : chunk?.block && typeof chunk.block === 'object' && typeof chunk.block.text === 'string' ? chunk.block.text
+              : typeof chunk.reason === 'string' ? chunk.reason
+              : ''
+            text += finishText
+          }
+        }
+      }
+      if (!text.trim()) {
+        semantic.status = 'unknown'
+        semantic.reason = 'semantic verifier returned empty output (provider stream emitted no text)'
+        semantic.attempts++
+        semantic.verifiedWorkspaceRevision = state.workspace.revision
+        ledger.record({ event: 'semantic-verifier/empty', sessionId: runtime.agent?.id, episode: episode.id, provider, model, outputHash: fingerprint(text) })
+        refreshPolicyHint(state, stateOptions())
+        return false
       }
       const result = parseSemanticVerifierResult(text)
       if (!result) {

@@ -11,7 +11,7 @@ import {
   registerToolCall,
   settleToolCall,
 } from '../lib/state.js'
-import { openVerificationDebts } from '../lib/debt.js'
+import { createVerificationDebtForArtifact, debtSatisfied, openVerificationDebts, pruneVerificationDebts } from '../lib/debt.js'
 
 const opts = { maxDynamicHintChars: 640, noInformationLimit: 3, fullBenchmarkMinQueries: 10000, fullBenchmarkMinRecall: 0.95, benchmarkScoreTolerancePercent: 2 }
 
@@ -164,4 +164,17 @@ test('positive evidence after a semantic pass invalidates the semantic pass even
   call(state, 'r', 'read', { file_path: 'src/core.ts' }, 'new relevant evidence', 10)
   assert.equal(state.episode.semanticVerification.status, 'pending')
   assert.equal(state.episode.semanticVerification.verifiedWorkspaceRevision, undefined)
+})
+
+test('superseded revision debts no longer gate completion and are pruned', () => {
+  const state = createGovernorState()
+  const d1 = createVerificationDebtForArtifact(state.workspace, 'src/a.ts', 1)
+  const d2 = createVerificationDebtForArtifact(state.workspace, 'src/a.ts', 2)
+  const d3 = createVerificationDebtForArtifact(state.workspace, 'src/a.ts', 3)
+  assert.equal(debtSatisfied(state.workspace, d1), true)
+  assert.equal(debtSatisfied(state.workspace, d2), true)
+  assert.equal(debtSatisfied(state.workspace, d3), false)
+  assert.deepEqual(openVerificationDebts(state.workspace).map(debt => debt.id), [d3.id])
+  pruneVerificationDebts(state.workspace)
+  assert.deepEqual([...state.workspace.verificationDebt.keys()], [d3.id])
 })
