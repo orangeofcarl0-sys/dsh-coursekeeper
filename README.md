@@ -214,6 +214,7 @@ coursekeeper_branch   # 仅 rolloutMode=verified-branching 且 exposeBranchTool=
 ```
 
 用户入口：
+- Web 会话标题栏新增 **CK** 按钮：点击弹出菜单，可直接发送 `/coursekeeper status|on|off|help` 到当前会话。
 - `/coursekeeper status|on|off|help`（host 命令，所有会话可见）：`status` 查看当前会话是否启用与 blockers；`on`/`off` 仅切换当前会话，不修改 profile 配置。
 - DSH 设置页新增 **Coursekeeper** 配置区：可全局设置 `mode`、`requireUserOptIn`、`semanticVerifier`、`autoVerify`、`exposeStatusTool`；设置可覆盖 bundle 默认值。
 

@@ -12,7 +12,7 @@ Host 命令，所有会话可见，用于查看/开启/关闭当前会话的 Cou
 /coursekeeper help     显示用法
 ```
 
-此外，DSH 设置页有 **Coursekeeper** 配置区，可全局调整 `mode`、`requireUserOptIn`、`semanticVerifier`、`autoVerify`、`exposeStatusTool`。
+此外，Web 会话标题栏会出现 **CK** 按钮：点击弹出菜单，可直接发送上面的命令，无需手打。DSH 设置页也有 **Coursekeeper** 配置区，可全局调整 `mode`、`requireUserOptIn`、`semanticVerifier`、`autoVerify`、`exposeStatusTool`。
 
 ## 1. `coursekeeper_control`
 
