@@ -33,8 +33,12 @@ window.__ModuleLoader__.load({
     function CoursekeeperAction(props) {
       const inputActions = props && props.inputActions;
       const [open, setOpen] = useState(false);
+      const [modeLabel, setModeLabel] = useState('');
       if (!inputActions) return null;
       const run = (line) => {
+        if (line.includes('/coursekeeper on') || line.includes('/coursekeeper active')) setModeLabel('active');
+        else if (line.includes('/coursekeeper shadow')) setModeLabel('shadow');
+        else if (line.includes('/coursekeeper off')) setModeLabel('off');
         try {
           inputActions.setDraft(line);
           inputActions.submit();
@@ -50,7 +54,7 @@ window.__ModuleLoader__.load({
       return react.createElement(
         'div',
         { style: styles.wrap },
-        react.createElement('button', { style: styles.button, title: 'Coursekeeper 控制', onClick: () => setOpen(!open) }, 'CK'),
+        react.createElement('button', { style: styles.button, title: 'Coursekeeper 控制', onClick: () => setOpen(!open) }, modeLabel || 'CK'),
         open ? react.createElement(
           'div',
           { style: styles.menu },
