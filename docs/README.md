@@ -22,3 +22,4 @@
 
 - [Verified Branching](VERIFIED_BRANCHING_MODE.md)：条件多 rollout、fresh-context comparative verification、winner reverify。
 - [Branching Runtime Protocol](BRANCHING_PROTOCOL.md)：WorkspaceForkProvider、BranchExecutor、ComparativeVerifierBackend 与失败语义。
+- [修复规范](REPAIR_SPEC.md)：语义验证韧性、债务生命周期、交互闭环、本地 workspace fork 等 P0–P3 修复设计。
