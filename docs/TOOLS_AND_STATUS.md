@@ -12,6 +12,8 @@ Host 命令，所有会话可见，用于查看/开启/关闭当前会话的 Cou
 /coursekeeper help     显示用法
 ```
 
+此外，DSH 设置页有 **Coursekeeper** 配置区，可全局调整 `mode`、`requireUserOptIn`、`semanticVerifier`、`autoVerify`、`exposeStatusTool`。
+
 ## 1. `coursekeeper_control`
 
 用途：修改当前 Route Contract 或 Acceptance 状态。它是写操作。

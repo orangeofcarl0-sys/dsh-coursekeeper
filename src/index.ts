@@ -12,6 +12,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-system-prompt'
@@ -126,6 +127,15 @@ export * from './profiles.js'
 export * from './adaptive/index.js'
 export * from './branching.js'
 export * from './branching-store.js'
+
+export const coursekeeperSettingsNamespace = settingsNamespace('coursekeeper')
+export const CoursekeeperSettingsSchema: any = z.object({
+  mode: z.union(['off', 'shadow', 'active'] as const).default('active'),
+  requireUserOptIn: z.boolean().default(true),
+  semanticVerifier: z.union(['off', 'risk', 'always'] as const).default('risk'),
+  autoVerify: z.boolean().default(true),
+  exposeStatusTool: z.boolean().default(true),
+})
 
 export const name = 'coursekeeper'
 export const inject = ['agents', 'sessions', 'systemPrompt', 'tools', 'llm', 'commands']
@@ -597,7 +607,7 @@ function episodeNeedsDepth(state: GovernorState): boolean {
 }
 
 export function apply(ctx: Context, inputConfig: Config = {}): void {
-  const config = resolvedConfig(inputConfig)
+  let config = resolvedConfig(inputConfig)
   const runtimeStates = new Map<any, RuntimeState>()
   const sessionStates = new WeakMap<any, RuntimeState>()
   const modelInfo = new Map<string, Promise<any>>()
@@ -606,6 +616,16 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
   const branchExperienceStore = new BranchExperienceStore({ enabled: config.branchExperienceMemory, path: config.branchExperiencePath, maxInMemory: config.branchExperienceMaxEntries })
   void experienceStore.ready()
   void branchExperienceStore.ready()
+
+  try {
+    ctx.inject(['settings'], (settingsCtx: any) => {
+      settingsCtx.settings.register(coursekeeperSettingsNamespace, CoursekeeperSettingsSchema)
+      const section = settingsCtx.settings.get(coursekeeperSettingsNamespace)
+      if (section && typeof section === 'object') {
+        config = resolvedConfig({ ...inputConfig, ...section })
+      }
+    })
+  } catch { /* settings service optional */ }
 
   const stateOptions = () => ({
     maxDynamicHintChars: config.maxDynamicHintChars,

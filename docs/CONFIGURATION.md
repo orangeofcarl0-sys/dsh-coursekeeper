@@ -19,6 +19,9 @@
 
 `mode: shadow` 表示 Coursekeeper 仍计算状态和记账，但不修改请求。它适合检查运行时兼容性。`adaptiveRouting: shadow` 则只限制自适应层，确定性 Governor 仍实际生效。
 
+DSH 设置页会注册 **Coursekeeper** 配置区（`mode` / `requireUserOptIn` / `semanticVerifier` / `autoVerify` / `exposeStatusTool`），用户可通过设置界面覆盖 bundle 默认值，无需手改 cordis.patch.yml。
+
+
 ## 2. Verified Branching
 
 以下字段只有 `rolloutMode: verified-branching` 时影响执行；默认 `single` 下不产生 candidate/verifier 成本。

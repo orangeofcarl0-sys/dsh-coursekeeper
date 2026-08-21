@@ -6,6 +6,7 @@
 - parseSemanticVerifierResult 容忍 markdown code fence 与前后杂讯。
 - 新增 coursekeeperComparativeVerifier 可选宿主注入保护（verifierProtocolFor 与候选比较路径），coursekeeper_status 不再因未注入而崩溃。
 - 新增 `/coursekeeper` 用户命令与 `requireUserOptIn` 会话级 opt-in；bundle 默认 `requireUserOptIn: true`，未执行 `/coursekeeper on` 的会话不注入、不阻塞。
+- 新增 DSH 设置页 Coursekeeper 配置区（mode/requireUserOptIn/semanticVerifier/autoVerify/exposeStatusTool），提供用户级全局交互入口。
 - 本地控制测试扩展到 67 项。
 
 # 0.8.0 — Verified Branching

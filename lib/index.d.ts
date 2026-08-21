@@ -21,6 +21,8 @@ export * from './profiles.js';
 export * from './adaptive/index.js';
 export * from './branching.js';
 export * from './branching-store.js';
+export declare const coursekeeperSettingsNamespace: import("@deepseek-ai/dsh-settings").SettingsNamespace;
+export declare const CoursekeeperSettingsSchema: any;
 export declare const name = "coursekeeper";
 export declare const inject: string[];
 export interface Config {
