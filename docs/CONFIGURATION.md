@@ -16,6 +16,13 @@
 | `autoVerify` | `true` | 自然结束有 blocker 时允许有限验证续步。 |
 | `maxAutomaticContinuations` | `1` | 每 turn 自动验证续步上限。 |
 | `stopRetryOnDeterministicErrors` | `true` | HTTP 400 / `invalid_request_error` 等确定性请求错误不进入普通 retry chain。 |
+| `semanticVerifierFailOpen` | `false` | 语义验证器基础设施连续失败达到阈值后是否允许放行（必须与审计配合）。 |
+| `maxSemanticVerifierInfraFailures` | `2` | 空输出/transport/unparseable 等 infra 失败阈值。 |
+| `verificationCommandPatterns` | `[]` | 额外 shell 验证命令正则；命中即视为 verify。 |
+| `dependencyScope` | `resolved` | `resolved` 使用依赖闭包；`conservative` mutation 时对所有已知 artifact 重开 command debt。 |
+| `sessionModeMemory` | `true` | 是否持久化 per-session off/shadow/active。 |
+| `sessionModePath` | `$DSH_HOME/coursekeeper/session-modes-v1.jsonl` | session mode JSONL。 |
+| `sessionModeMaxEntries` | `2000` | 内存最多会话模式条目。 |
 
 `mode: shadow` 表示 Coursekeeper 仍计算状态和记账，但不修改请求。它适合检查运行时兼容性。`adaptiveRouting: shadow` 则只限制自适应层，确定性 Governor 仍实际生效。
 
@@ -54,6 +61,11 @@ DSH 设置页会注册 **Coursekeeper** 配置区（`mode` / `requireUserOptIn` 
 | `exposeBranchTool` | Verified Branching 时 `true` | 注册 `coursekeeper_branch`。显式配置可覆盖。 |
 | `crossProtocolWeight` | `0` | 不同 generator protocol fingerprint 的经验权重；默认完全隔离。 |
 | `crossRolloutWeight` | `0.25` | 不同 rollout mode 经验的迁移权重。 |
+| `branchLocalForkEnabled` | `false` | 启用本地文件复制 WorkspaceForkProvider。 |
+| `branchLocalWorkspaceRoot` | 未设置 | 本地 fork 工作区根目录。 |
+| `branchLocalWorkspaceRefRoot` | 未设置 | fork 副本根目录（默认系统 temp）。 |
+| `branchLocalCommand` | `[]` | 在 fork workspace 执行的验证命令。 |
+| `branchLocalTimeoutMs` | `120000` | 本地 command 超时。 |
 
 `branchInitialCandidates` 会被 `branchMaxCandidates` 下界约束。默认 progressive Bo2→Bo3，而不是固定 Bo5。
 
