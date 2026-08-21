@@ -693,14 +693,20 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
     })
   }
 
-  const verifierProtocolFor = (runtime: RuntimeState) => ({
-    profile: 'fresh-evidence-evaluator-v1',
-    providerFamily: normalizedFamily(config.comparativeVerifierProvider ?? runtime.lastProvider ?? runtime.agent?.options?.provider),
-    modelFamily: normalizedFamily(config.comparativeVerifierModel ?? runtime.lastModel ?? runtime.agent?.options?.model),
-    context: 'fresh' as const,
-    includesGeneratorReasoning: false as const,
-    scoring: ((ctx as any).coursekeeperComparativeVerifier?.scoring ?? 'structured') as 'structured' | 'fine-grained-logprob' | 'external',
-  })
+  const verifierProtocolFor = (runtime: RuntimeState) => {
+    let scoring: 'structured' | 'fine-grained-logprob' | 'external' = 'structured'
+    try {
+      scoring = ((ctx as any).coursekeeperComparativeVerifier?.scoring ?? 'structured') as 'structured' | 'fine-grained-logprob' | 'external'
+    } catch { /* optional host capability absent */ }
+    return {
+      profile: 'fresh-evidence-evaluator-v1',
+      providerFamily: normalizedFamily(config.comparativeVerifierProvider ?? runtime.lastProvider ?? runtime.agent?.options?.provider),
+      modelFamily: normalizedFamily(config.comparativeVerifierModel ?? runtime.lastModel ?? runtime.agent?.options?.model),
+      context: 'fresh' as const,
+      includesGeneratorReasoning: false as const,
+      scoring,
+    }
+  }
 
   const finalizeBranchExperience = (runtime: RuntimeState, finalReverifyPassed: boolean): void => {
     const episode = runtime.governor.episode
@@ -814,7 +820,8 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
   ) => {
     const episode = runtime.governor.episode
     if (!episode) return undefined
-    const external = (ctx as any).coursekeeperComparativeVerifier
+    let external: any
+    try { external = (ctx as any).coursekeeperComparativeVerifier } catch { external = undefined }
     const wave = episode.branching.current
     if (runtime.branchVerifierInFlight || (wave && wave.verifierCalls >= config.maxComparativeVerifierCalls)) return undefined
     if (external?.compare) {
