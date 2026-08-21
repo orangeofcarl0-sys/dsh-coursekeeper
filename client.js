@@ -2,7 +2,7 @@
 // quick menu and submits the corresponding /coursekeeper command through the
 // composer input actions. Kept dependency-light (React only).
 window.__ModuleLoader__.load({
-  id: '@orangeofcarl0-sys/dsh-coursekeeper-client',
+  id: '@orangeofcarl0-sys/dsh-coursekeeper',
   factory: (require) => {
     const module = { exports: {} };
     const exports = module.exports;
