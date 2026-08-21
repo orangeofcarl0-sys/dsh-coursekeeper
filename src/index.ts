@@ -804,13 +804,20 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
     try {
       scoring = ((ctx as any).coursekeeperComparativeVerifier?.scoring ?? 'structured') as 'structured' | 'fine-grained-logprob' | 'external'
     } catch { /* optional host capability absent */ }
+    const generatorProvider = runtime.lastProvider ?? runtime.agent?.options?.provider
+    const generatorModel = runtime.lastModel ?? runtime.agent?.options?.model
+    const verifierProvider = config.comparativeVerifierProvider ?? generatorProvider
+    const verifierModel = config.comparativeVerifierModel ?? generatorModel
+    const limitedIndependence = normalizedFamily(verifierProvider) === normalizedFamily(generatorProvider)
+      && normalizedFamily(verifierModel) === normalizedFamily(generatorModel)
     return {
       profile: 'fresh-evidence-evaluator-v1',
-      providerFamily: normalizedFamily(config.comparativeVerifierProvider ?? runtime.lastProvider ?? runtime.agent?.options?.provider),
-      modelFamily: normalizedFamily(config.comparativeVerifierModel ?? runtime.lastModel ?? runtime.agent?.options?.model),
+      providerFamily: normalizedFamily(verifierProvider),
+      modelFamily: normalizedFamily(verifierModel),
       context: 'fresh' as const,
       includesGeneratorReasoning: false as const,
       scoring,
+      limitedIndependence,
     }
   }
 
@@ -1989,6 +1996,17 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
           jspaceAssist: config.jspaceAssist,
           routerAssist: config.routerAssist,
           semanticVerifier: config.semanticVerifier,
+          semanticVerifierIndependence: (() => {
+            const genP = runtime.lastProvider ?? runtime.agent?.options?.provider
+            const genM = runtime.lastModel ?? runtime.agent?.options?.model
+            const semP = config.semanticVerifierProvider ?? genP
+            const semM = config.semanticVerifierModel ?? genM
+            return {
+              providerFamily: normalizedFamily(semP),
+              modelFamily: normalizedFamily(semM),
+              limitedIndependence: normalizedFamily(semP) === normalizedFamily(genP) && normalizedFamily(semM) === normalizedFamily(genM),
+            }
+          })(),
           capabilityControl: config.capabilityControl,
           adaptiveReasoning: config.adaptiveReasoning,
           adaptiveRouting: config.adaptiveRouting,

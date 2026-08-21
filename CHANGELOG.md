@@ -15,6 +15,7 @@
 - 实现 BR-001 本地 WorkspaceForkProvider / BranchExecutor（branchLocalForkEnabled / branchLocalWorkspaceRoot / branchLocalCommand），可配置启用本地文件复制候选隔离与命令执行。
 - 实现 UX-001 子集：per-session 模式持久化（SessionModeStore），CK 菜单新增 verifier allow / cleanup 操作。
 - 实现 VER-001 验证命令模板：新增 `verificationCommandPatterns` 配置，可识别自定义测试命令。
+- 实现 IND-001 验证器独立性显式化：status 输出 semantic/comparative verifier 是否与 generator 同源（limitedIndependence）。
 - 本地控制测试扩展到 75 项。
 
 # 0.8.0 — Verified Branching
