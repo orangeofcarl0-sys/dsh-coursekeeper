@@ -62,6 +62,7 @@ import {
 import { cleanupVerificationDebts } from './debt.js'
 import { LocalWorkspaceForkProvider, LocalBranchExecutor } from './workspace-fork-local.js'
 import { SessionModeStore } from './session-mode-store.js'
+import { registerSessionHandle, unregisterSessionHandle } from './runtime-registry.js'
 import type {
   AdaptiveReasoningMode,
   AugmentationProfile,
@@ -739,11 +740,17 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
     const governor = Array.isArray(agent?.session?.events)
       ? rebuildStateFromEvents(agent.session.events, stateOptions())
       : createGovernorState()
+    const sessionKey = String(agent?.session?.id ?? agent?.id ?? '')
     runtime = {
-      agent, governor, userMode: sessionModeStore.get(String(agent?.session?.id ?? agent?.id ?? '')) ?? (config.requireUserOptIn ? 'off' : config.mode), restrictionDenied: [], effortOverrideApplied: false, semanticVerifierInFlight: false,
+      agent, governor, userMode: sessionModeStore.get(String(sessionKey)) ?? (config.requireUserOptIn ? 'off' : config.mode), restrictionDenied: [], effortOverrideApplied: false, semanticVerifierInFlight: false,
       metrics: newEpisodeMetrics(), externalFailure: false, routeChallengeCount: 0, branchVerifierInFlight: false, suppressedVisiblePolicies: 0,
     }
     runtimeStates.set(agent, runtime)
+    registerSessionHandle(sessionKey, {
+      getMode: () => runtime.userMode,
+      setMode: (mode: GovernorMode) => { setSessionMode(runtime.agent, mode) },
+      getStatus: () => ({ userMode: runtime.userMode, episode: runtime.governor.episode?.id ?? null, phase: runtime.governor.episode?.phase ?? null, blockers: completionBlockers(runtime.governor, stateOptions()) }),
+    })
     if (agent?.session) sessionStates.set(agent.session, runtime)
     if (sessionControlled(agent)) installGuard(runtime)
     refreshRestriction(runtime)
@@ -1541,6 +1548,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
 
   ctx.on('agent/created', ({ agent }: any) => { stateFor(agent) })
   ctx.on('agent/disposed', ({ agent }: any) => {
+    unregisterSessionHandle(String(agent?.session?.id ?? agent?.id ?? ''))
     const runtime = runtimeStates.get(agent)
     if (runtime) {
       finalizeExperience(runtime)

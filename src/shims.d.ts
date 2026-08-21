@@ -23,3 +23,9 @@ declare module 'node:fs/promises' { export const appendFile: any; export const m
 declare module 'node:os' { export const homedir: any; export const tmpdir: any }
 declare module 'node:child_process' { export const execFile: any }
 declare module 'node:util' { export const promisify: any }
+declare module '@deepseek-ai/dsh-typert-protocol' {
+  export const Remote: any
+  export class TypertRemoteService {
+    constructor(ctx: any, name: string)
+  }
+}

@@ -7,7 +7,7 @@ window.__ModuleLoader__.load({
     const module = { exports: {} };
     const exports = module.exports;
     const react = require('react');
-    const { useState } = react;
+    const { useState, useEffect } = react;
 
     const styles = {
       wrap: { position: 'relative', display: 'inline-flex', alignItems: 'center' },
@@ -32,13 +32,28 @@ window.__ModuleLoader__.load({
 
     function CoursekeeperAction(props) {
       const inputActions = props && props.inputActions;
+      const sessionId = props && props.sessionId;
+      const ckApi = props && props.ckApi;
       const [open, setOpen] = useState(false);
       const [modeLabel, setModeLabel] = useState('');
-      if (!inputActions) return null;
+      useEffect(() => {
+        if (!ckApi || !sessionId) return;
+        ckApi.status(sessionId).then((s) => { if (s && s.userMode) setModeLabel(s.userMode); }).catch(() => {});
+      }, [ckApi, sessionId]);
+      const modeForLine = (line) => {
+        if (line.includes('/coursekeeper on') || line.includes('/coursekeeper active')) return 'active';
+        if (line.includes('/coursekeeper shadow')) return 'shadow';
+        if (line.includes('/coursekeeper off')) return 'off';
+        return null;
+      };
       const run = (line) => {
-        if (line.includes('/coursekeeper on') || line.includes('/coursekeeper active')) setModeLabel('active');
-        else if (line.includes('/coursekeeper shadow')) setModeLabel('shadow');
-        else if (line.includes('/coursekeeper off')) setModeLabel('off');
+        const mode = modeForLine(line);
+        if (mode && ckApi && sessionId) {
+          ckApi.setMode(sessionId, mode).then((r) => { setModeLabel((r && r.mode) || mode); }).catch(() => setModeLabel(mode));
+          setOpen(false);
+          return;
+        }
+        if (mode) setModeLabel(mode);
         try {
           inputActions.setDraft(line);
           inputActions.submit();
@@ -79,13 +94,25 @@ window.__ModuleLoader__.load({
       );
     }
 
-    exports.inject = ['slots'];
-    exports.apply = function apply(ctx) {
+    exports.inject = ['slots', 'remote'];
+    exports.apply = async function apply(ctx) {
+      const passthrough = { parse: (v) => v };
+      const TYPERT_REMOTE = {
+        package: 'coursekeeper',
+        descriptors: [
+          { id: 'coursekeeper#coursekeeper/status', service: 'coursekeeper', namespace: 'coursekeeper', method: 'status', invocation: { kind: 'direct' }, parameters: [{ name: 'sessionId', wire: 'sessionId', source: 'json', codec: { mode: 'strict', typeSymbol: 'coursekeeper#coursekeeper/status:sessionId', schema: passthrough } }], result: { mode: 'strict', typeSymbol: 'coursekeeper#coursekeeper/status:result', schema: passthrough }, sourceLocation: { file: 'coursekeeper-service.ts', line: 1, column: 1 } },
+          { id: 'coursekeeper#coursekeeper/setMode', service: 'coursekeeper', namespace: 'coursekeeper', method: 'setMode', invocation: { kind: 'direct' }, parameters: [{ name: 'sessionId', wire: 'sessionId', source: 'json', codec: { mode: 'strict', typeSymbol: 'coursekeeper#coursekeeper/setMode:sessionId', schema: passthrough } }, { name: 'mode', wire: 'mode', source: 'json', codec: { mode: 'strict', typeSymbol: 'coursekeeper#coursekeeper/setMode:mode', schema: passthrough } }], result: { mode: 'strict', typeSymbol: 'coursekeeper#coursekeeper/setMode:result', schema: passthrough }, sourceLocation: { file: 'coursekeeper-service.ts', line: 1, column: 1 } },
+        ],
+      };
+      try { await ctx.remote[String.fromCharCode(36) + 'mount'](TYPERT_REMOTE); } catch (e) { /* remote unavailable; command fallback remains */ }
+      let ckApi = null;
+      try { ckApi = ctx.get('remote.coursekeeper'); } catch (e) { ckApi = null; }
       ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
         name: 'conversation.session.header.actions',
         id: 'coursekeeper',
         order: 100,
         label: 'Coursekeeper',
+        inject: () => ({ ckApi }),
       }, CoursekeeperAction));
       ctx.slots.inject('settings.section', () => ctx.slots.register({
         name: 'settings.section',

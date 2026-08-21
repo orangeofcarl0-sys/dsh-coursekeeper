@@ -68,3 +68,5 @@
         fullBenchmarkMinRecall: 0.95
         benchmarkScoreTolerancePercent: 2
         stopRetryOnDeterministicErrors: true
+    - id: coursekeeper-service
+      name: '@orangeofcarl0-sys/dsh-coursekeeper/coursekeeper-service'

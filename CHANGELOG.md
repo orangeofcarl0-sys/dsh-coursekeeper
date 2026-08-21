@@ -20,6 +20,7 @@
 - 实现 SEC-001 审计边界：`/coursekeeper` 用户命令与 `coursekeeper_control` 均记录来源（user-command / model-tool）与 action。
 - 实现 UX-001 设置页客户端面板：DSH 设置页新增 Coursekeeper 配置说明面板。
 - 实现 UX-001 CK 即时模式徽标：点击启用/观察/关闭后按钮立即显示 active/shadow/off。
+- 实现 UX-001 直接 host service：新增 coursekeeper Remote service，CK 菜单可直接查询/切换模式（保留命令 fallback）。
 - 本地控制测试扩展到 76 项。
 
 # 0.8.0 — Verified Branching

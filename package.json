@@ -39,7 +39,8 @@
       "types": "./lib/branching-store.d.ts",
       "default": "./lib/branching-store.js"
     },
-    "./client": "./client.js"
+    "./client": "./client.js",
+    "./coursekeeper-service": "./lib/coursekeeper-service.js"
   },
   "files": [
     "lib",
