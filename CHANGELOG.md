@@ -8,6 +8,7 @@
 - 新增 `/coursekeeper` 用户命令与 `requireUserOptIn` 会话级 opt-in；bundle 默认 `requireUserOptIn: true`，未执行 `/coursekeeper on` 的会话不注入、不阻塞。
 - 新增 DSH 设置页 Coursekeeper 配置区（mode/requireUserOptIn/semanticVerifier/autoVerify/exposeStatusTool），提供用户级全局交互入口。
 - 新增 Web 会话标题栏 CK 按钮菜单：点击即可投递 `/coursekeeper status|on|off|help`。
+- 新增 per-session 三档模式：active 完整管制 / shadow 仅观察 / off 完全关闭；`/coursekeeper shadow` 与 CK 菜单同步支持。
 - 本地控制测试扩展到 67 项。
 
 # 0.8.0 — Verified Branching

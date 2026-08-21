@@ -6,9 +6,10 @@
 Host 命令，所有会话可见，用于查看/开启/关闭当前会话的 Coursekeeper 管制：
 
 ```text
-/coursekeeper status   查看当前会话是否启用、route/acceptance/verification/blockers
-/coursekeeper on       为当前会话启用（需 requireUserOptIn: true 时）
-/coursekeeper off      为当前会话关闭，后续不再注入或阻塞
+/coursekeeper status   查看当前会话状态（off/shadow/active）、route/acceptance/verification/blockers
+/coursekeeper on       完整管制（active）：注入、拦截、验证、blockers
+/coursekeeper shadow   仅观察：记录状态，不注入、不拦截
+/coursekeeper off      完全关闭：不注入、不阻塞
 /coursekeeper help     显示用法
 ```
 

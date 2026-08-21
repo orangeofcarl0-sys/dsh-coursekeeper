@@ -503,7 +503,7 @@ interface MutableEpisodeMetrics {
 interface RuntimeState {
   readonly agent: any
   readonly governor: GovernorState
-  userEnabled: boolean
+  userMode: GovernorMode
   guardDispose?: () => void
   restrictionDispose?: () => void
   restrictionDenied: string[]
@@ -641,23 +641,28 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
   })
 
   const sessionEnabled = (agent: any): boolean => {
-    if (config.mode === 'off') return false
-    if (!config.requireUserOptIn) return true
     const runtime = runtimeStates.get(agent)
-    return Boolean(runtime?.userEnabled)
+    if (runtime) return runtime.userMode !== 'off'
+    return !config.requireUserOptIn && config.mode !== 'off'
   }
 
-  const setSessionEnabled = (agent: any, enabled: boolean): RuntimeState => {
+  const sessionControlled = (agent: any): boolean => {
+    const runtime = runtimeStates.get(agent)
+    if (runtime) return runtime.userMode === 'active'
+    return !config.requireUserOptIn && config.mode === 'active'
+  }
+
+  const setSessionMode = (agent: any, mode: GovernorMode): RuntimeState => {
     const runtime = stateFor(agent)
-    if (runtime.userEnabled === enabled) return runtime
-    runtime.userEnabled = enabled
-    if (enabled) {
+    if (runtime.userMode === mode) return runtime
+    runtime.userMode = mode
+    if (mode === 'active') {
       installGuard(runtime)
       refreshRestriction(runtime)
     } else {
       runtime.guardDispose?.()
       runtime.guardDispose = undefined
-      releaseRestriction(runtime, 'user-disabled')
+      releaseRestriction(runtime, 'user-mode:' + mode)
     }
     return runtime
   }
@@ -676,12 +681,12 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
       ? rebuildStateFromEvents(agent.session.events, stateOptions())
       : createGovernorState()
     runtime = {
-      agent, governor, userEnabled: !config.requireUserOptIn, restrictionDenied: [], effortOverrideApplied: false, semanticVerifierInFlight: false,
+      agent, governor, userMode: config.requireUserOptIn ? 'off' : config.mode, restrictionDenied: [], effortOverrideApplied: false, semanticVerifierInFlight: false,
       metrics: newEpisodeMetrics(), externalFailure: false, routeChallengeCount: 0, branchVerifierInFlight: false, suppressedVisiblePolicies: 0,
     }
     runtimeStates.set(agent, runtime)
     if (agent?.session) sessionStates.set(agent.session, runtime)
-    if (sessionEnabled(agent)) installGuard(runtime)
+    if (sessionControlled(agent)) installGuard(runtime)
     refreshRestriction(runtime)
     ledger.record({ event: 'state/rebuilt', sessionId: agent?.id, events: agent?.session?.events?.length ?? 0, episode: governor.episode?.id ?? null })
     return runtime
@@ -1401,7 +1406,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
   }
 
   const refreshRestriction = (runtime: RuntimeState): void => {
-    if (!sessionEnabled(runtime.agent)) {
+    if (!sessionControlled(runtime.agent)) {
       releaseRestriction(runtime, 'user-disabled')
       return
     }
@@ -1429,7 +1434,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
   }
 
   function installGuard(runtime: RuntimeState): void {
-    if (runtime.guardDispose || config.mode !== 'active' || !sessionEnabled(runtime.agent)) return
+    if (runtime.guardDispose || !sessionControlled(runtime.agent)) return
     try {
       runtime.guardDispose = runtime.agent.ctx.tools.guard((execution: any) => {
         const semantics = classifyExecution(execution)
@@ -1463,7 +1468,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
 
   // Durable human input is available here before first assembly.
   ctx.on('agent/inbox/claimed', ({ agent, message, turn }: any) => {
-    if (config.mode === 'off' || !sessionEnabled(agent) || message?.source?.kind !== 'user') return
+    if (!sessionEnabled(agent) || message?.source?.kind !== 'user') return
     const runtime = stateFor(agent)
     const state = runtime.governor
     const text = contentText(message.content ?? [])
@@ -1489,14 +1494,14 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
   ctx.on('system-prompt/assemble', async (_assembly: any, context: any, next: any) => {
     const assembled = await next()
     const agent = context.agent
-    if (!agent || config.mode === 'off' || !sessionEnabled(agent)) return assembled
+    if (!agent || !sessionEnabled(agent)) return assembled
     const runtime = stateFor(agent)
     await prepareAdaptiveRoute(runtime)
     refreshRestriction(runtime)
     let output = assembled
     let routerChanged = false
     let nativeCanonicalChanged = false
-    if (config.mode === 'active' && config.augmentationProfile === 'native-canonical') {
+    if (sessionControlled(agent) && config.augmentationProfile === 'native-canonical') {
       const canonical = applyNativeCanonicalProfile(assembled)
       output = { ...assembled, sections: canonical.sections, tools: canonical.tools }
       nativeCanonicalChanged = canonical.changed
@@ -1515,7 +1520,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
         stable: runtime.nativeCanonicalSurface.stable, deviations: canonical.deviations,
       })
     }
-    if (config.mode === 'active' && config.augmentationProfile !== 'native-canonical' && config.routerAssist !== 'off' && runtime.governor.episode) {
+    if (sessionControlled(agent) && config.augmentationProfile !== 'native-canonical' && config.routerAssist !== 'off' && runtime.governor.episode) {
       const promoted = Array.isArray(agent?.session?.events) && agent.session.events.some((event: any) => event?.type === 'tool/call')
       const assisted = applyRouterAssist(assembled, runtime.governor.episode.route.route, config.routerAssist, promoted)
       if (assisted.changed) {
@@ -1535,7 +1540,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
 
   ctx.on('agent/pre-step', async ({ agent }: any, next: any): Promise<any> => {
     const decision = await next()
-    if (decision?.kind === 'reject' || config.mode !== 'active' || !sessionEnabled(agent)) return decision
+    if (decision?.kind === 'reject' || !sessionControlled(agent)) return decision
     const runtime = stateFor(agent)
     const state = runtime.governor
     if (config.augmentationProfile === 'native-canonical') {
@@ -1570,7 +1575,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
       runtime.protocolRequest = observeRequestProtocol(proposed?.messages ?? [])
       ledger.record({ event: 'protocol/request-observed', sessionId: agent.id, episode: runtime.governor.episode?.id ?? null, ...runtime.protocolRequest })
     }
-    if (config.mode !== 'active' || config.adaptiveReasoning === 'off' || !sessionEnabled(agent)) return proposed
+    if (!sessionControlled(agent) || config.adaptiveReasoning === 'off') return proposed
     const state = runtime.governor
     const wantsDepth = config.adaptiveReasoning === 'episode' ? episodeNeedsDepth(state) : phaseNeedsDepth(state.episode?.phase ?? '')
     if (!wantsDepth) {
@@ -1607,7 +1612,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
   })
 
   ctx.on('agent/request-error', async ({ agent, turn, step, provider, failure }: any, next: any) => {
-    if (config.mode === 'off' || !sessionEnabled(agent)) return next()
+    if (!sessionEnabled(agent)) return next()
     const runtime = stateFor(agent)
     runtime.externalFailure = true
     if (!config.stopRetryOnDeterministicErrors || !isTerminalLlmFailure(failure)) return next()
@@ -1621,7 +1626,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
 
   ctx.on('session/event', (session: any, event: any) => {
     const runtime = sessionStates.get(session)
-    if (!runtime || config.mode === 'off' || !sessionEnabled(runtime.agent)) return
+    if (!runtime || !sessionEnabled(runtime.agent)) return
     const state = runtime.governor
     switch (event.type) {
       case 'tool/call': {
@@ -1680,7 +1685,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
   })
 
   ctx.on('agent/turn-stopping', async ({ agent, turn, signal }: any) => {
-    if (config.mode !== 'active' || !config.autoVerify || signal?.aborted || !sessionEnabled(agent)) return
+    if (!sessionControlled(agent) || !config.autoVerify || signal?.aborted) return
     const runtime = stateFor(agent)
     const state = runtime.governor
     if (state.planMode) return
@@ -1971,36 +1976,43 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
     ctx.commands.register({
       name: 'coursekeeper',
       description: '查看/开启/关闭当前会话的 Coursekeeper 管制',
-      input: { hint: '[status|on|off|help]' },
+      input: { hint: '[status|on|off|shadow|help]' },
       handler: (invocation: any) => {
         const agent = invocation?.agent
         if (!agent) return { kind: 'error', text: 'coursekeeper: no owning agent' }
         const raw = String(invocation?.rawInput ?? '').trim().toLowerCase()
         const sub = raw.split(/\s+/)[0] || 'status'
-        if (sub === 'on') {
-          setSessionEnabled(agent, true)
-          return { kind: 'success', text: 'coursekeeper: enabled for this session (' + config.mode + ').' }
+        if (sub === 'on' || sub === 'active') {
+          setSessionMode(agent, 'active')
+          return { kind: 'success', text: 'coursekeeper: full control enabled for this session.' }
+        }
+        if (sub === 'shadow') {
+          setSessionMode(agent, 'shadow')
+          return { kind: 'success', text: 'coursekeeper: observe-only enabled for this session (no injection or blocking).' }
         }
         if (sub === 'off') {
-          setSessionEnabled(agent, false)
+          setSessionMode(agent, 'off')
           return { kind: 'success', text: 'coursekeeper: disabled for this session; no further injection or blocking.' }
         }
         if (sub === 'help') {
           const lines = [
-            'coursekeeper [status|on|off|help]',
+            'coursekeeper [status|on|off|shadow|help]',
             '  status  show this session state and blockers',
-            '  on      enable coursekeeper for this session only',
+            '  on      enable full control for this session only',
+            '  shadow  observe only: record status, no injection or blocking',
             '  off     disable coursekeeper for this session only',
           ]
           return { kind: 'success', text: lines.join(String.fromCharCode(10)) }
         }
         const runtime = stateFor(agent)
         const state = runtime.governor
-        const enabled = sessionEnabled(agent)
+        const runtimeMode = runtime.userMode
+        const enabled = runtimeMode !== 'off'
+        const controlled = runtimeMode === 'active'
         const blockers = completionBlockers(state, stateOptions())
         const lines = [
-          'coursekeeper: ' + (enabled ? 'enabled' : 'disabled') + ' for this session',
-          'mode=' + config.mode + ' requireUserOptIn=' + config.requireUserOptIn,
+          'coursekeeper: ' + (enabled ? (controlled ? 'active' : 'shadow') : 'disabled') + ' for this session',
+          'mode=' + runtimeMode + ' (global=' + config.mode + ') requireUserOptIn=' + config.requireUserOptIn,
           'route=' + (state.episode?.route.route ?? '-') + ' phase=' + (state.episode?.phase ?? '-'),
           'acceptance=' + (state.episode ? openAcceptanceCount(state) : 0) + ' verification=' + openVerificationCount(state),
           blockers.length ? 'blockers:' : 'blockers: none',
