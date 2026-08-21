@@ -17,6 +17,7 @@
 - 实现 VER-001 验证命令模板：新增 `verificationCommandPatterns` 配置，可识别自定义测试命令。
 - 实现 IND-001 验证器独立性显式化：status 输出 semantic/comparative verifier 是否与 generator 同源（limitedIndependence）。
 - 实现 DEP-001 依赖图保守模式：新增 `dependencyScope: resolved|conservative`，conservative 下 mutation 会对所有已知 artifact 重开 command debt。
+- 实现 SEC-001 审计边界：`/coursekeeper` 用户命令与 `coursekeeper_control` 均记录来源（user-command / model-tool）与 action。
 - 本地控制测试扩展到 76 项。
 
 # 0.8.0 — Verified Branching
