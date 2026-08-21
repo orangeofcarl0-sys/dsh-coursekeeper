@@ -2159,6 +2159,36 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
     })
   }, 'coursekeeper.user-command')
 
+  try {
+    ctx.inject(['goals'], (goalsCtx: any) => {
+      ctx.effect(() => {
+        (ctx as any).tools.register(defineTool({
+          name: 'goal_complete',
+          description: 'Mark the current DSH goal as complete and stop further goal rounds.',
+          parameters: {
+            summary: { type: 'string', description: 'Optional completion summary for audit.' },
+            reason: { type: 'string', description: 'Optional completion reason.' },
+          },
+          output: { schema: { type: 'string' }, render: (_args: any, value: any) => [{ type: 'text', text: value }] },
+          async execute(args: Record<string, unknown>, exec: any) {
+            const agent = exec?.agent
+            if (!agent) return JSON.stringify({ ok: false, reason: 'no owning agent' })
+            try {
+              const goals = (goalsCtx as any).goals
+              const current = goals.get(agent)
+              if (!current || current.phase === 'complete') return JSON.stringify({ ok: false, reason: 'no active goal to complete' })
+              const completed = goals.complete(agent, { id: current.id, revision: current.revision })
+              return JSON.stringify({ ok: true, goal: completed, summary: String(args.summary ?? ''), reason: String(args.reason ?? '') })
+            } catch (error) {
+              return JSON.stringify({ ok: false, reason: error instanceof Error ? error.message : String(error) })
+            }
+          },
+          presentCall: () => ({ card: 'goal', kind: 'write' }),
+        }))
+      }, 'coursekeeper.goal-complete')
+    })
+  } catch { /* goals service optional */ }
+
 
   ctx.effect(() => async () => {
     for (const runtime of runtimeStates.values()) {
