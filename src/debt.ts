@@ -266,9 +266,17 @@ export function dependentClosure(workspace: WorkspaceState, path: string, maxDep
   return [...seen]
 }
 
-export function createDependentVerificationDebts(workspace: WorkspaceState, mutatedPath: string, sequence: number): VerificationDebt[] {
+export function createDependentVerificationDebts(
+  workspace: WorkspaceState,
+  mutatedPath: string,
+  sequence: number,
+  conservative = false,
+): VerificationDebt[] {
   const created: VerificationDebt[] = []
-  for (const dependent of dependentClosure(workspace, mutatedPath)) {
+  const dependents = conservative
+    ? [...workspace.artifacts.values()].map(artifact => artifact.path).filter(path => !sameArtifact(path, mutatedPath))
+    : dependentClosure(workspace, mutatedPath)
+  for (const dependent of dependents) {
     const state = artifactState(workspace, dependent)
     const debt: VerificationDebt = {
       id: `dependent:${normalizePath(mutatedPath)}->${dependent}@${state.revision}`,

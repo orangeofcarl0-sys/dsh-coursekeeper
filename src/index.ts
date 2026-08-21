@@ -230,6 +230,7 @@ export interface Config {
   benchmarkToolNames?: string[]
   verificationToolNames?: string[]
   verificationCommandPatterns?: string[]
+  dependencyScope?: 'resolved' | 'conservative'
   finishToolNames?: string[]
   fullBenchmarkMinQueries?: number
   fullBenchmarkMinRecall?: number
@@ -325,6 +326,7 @@ export const Config: any = z.object({
   benchmarkToolNames: z.array(z.string()).default([...DEFAULT_BENCHMARK_TOOL_NAMES]),
   verificationToolNames: z.array(z.string()).default([...DEFAULT_VERIFICATION_TOOL_NAMES]),
   verificationCommandPatterns: z.array(z.string()).default([]),
+  dependencyScope: z.union(['resolved', 'conservative'] as const).default('resolved'),
   finishToolNames: z.array(z.string()).default([...DEFAULT_FINISH_TOOL_NAMES]),
   fullBenchmarkMinQueries: z.natural().min(1).default(10_000),
   fullBenchmarkMinRecall: z.number().min(0).max(1).default(0.95),
@@ -420,6 +422,7 @@ interface ResolvedConfig {
   benchmarkToolNames: string[]
   verificationToolNames: string[]
   verificationCommandPatterns: string[]
+  dependencyScope: 'resolved' | 'conservative'
   finishToolNames: string[]
   fullBenchmarkMinQueries: number
   fullBenchmarkMinRecall: number
@@ -524,6 +527,7 @@ function resolvedConfig(input: Config): ResolvedConfig {
     benchmarkToolNames: input.benchmarkToolNames ?? [...DEFAULT_BENCHMARK_TOOL_NAMES],
     verificationToolNames: input.verificationToolNames ?? [...DEFAULT_VERIFICATION_TOOL_NAMES],
     verificationCommandPatterns: input.verificationCommandPatterns ?? [],
+    dependencyScope: input.dependencyScope ?? 'resolved',
     finishToolNames: input.finishToolNames ?? [...DEFAULT_FINISH_TOOL_NAMES],
     fullBenchmarkMinQueries: input.fullBenchmarkMinQueries ?? 10_000,
     fullBenchmarkMinRecall: input.fullBenchmarkMinRecall ?? 0.95,
@@ -686,6 +690,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
     benchmarkToolNames: config.benchmarkToolNames,
     verificationToolNames: config.verificationToolNames,
     verificationCommandPatterns: config.verificationCommandPatterns,
+    dependencyScope: config.dependencyScope,
     finishToolNames: config.finishToolNames,
     semanticVerifierMode: config.semanticVerifier,
     semanticVerifierFailOpen: config.semanticVerifierFailOpen,

@@ -112,6 +112,7 @@ export interface Config {
     benchmarkToolNames?: string[];
     verificationToolNames?: string[];
     verificationCommandPatterns?: string[];
+    dependencyScope?: 'resolved' | 'conservative';
     finishToolNames?: string[];
     fullBenchmarkMinQueries?: number;
     fullBenchmarkMinRecall?: number;

@@ -11,7 +11,7 @@ import {
   registerToolCall,
   settleToolCall,
 } from '../lib/state.js'
-import { createVerificationDebtForArtifact, debtSatisfied, markArtifactRemoved, openVerificationDebts, pruneVerificationDebts, cleanupVerificationDebts } from '../lib/debt.js'
+import { createVerificationDebtForArtifact, createDependentVerificationDebts, debtSatisfied, markArtifactRemoved, openVerificationDebts, pruneVerificationDebts, cleanupVerificationDebts } from '../lib/debt.js'
 
 const opts = { maxDynamicHintChars: 640, noInformationLimit: 3, fullBenchmarkMinQueries: 10000, fullBenchmarkMinRecall: 0.95, benchmarkScoreTolerancePercent: 2 }
 
@@ -209,4 +209,14 @@ test('semantic infra-fail user escape removes semantic blocker', () => {
   assert.ok(completionBlockers(state, riskOpts).some(x => x.includes('Independent semantic verification')))
   state.episode.semanticVerification.userAllowedInfraFail = true
   assert.ok(!completionBlockers(state, riskOpts).some(x => x.includes('Independent semantic verification')))
+})
+
+test('conservative dependency scope creates command debt for unrelated known artifact', () => {
+  const state = createGovernorState()
+  createVerificationDebtForArtifact(state.workspace, 'src/a.ts', 1)
+  createVerificationDebtForArtifact(state.workspace, 'src/b.ts', 2)
+  const created = createDependentVerificationDebts(state.workspace, 'src/a.ts', 3, true)
+  assert.ok(created.some(debt => debt.artifact.endsWith('src/b.ts')))
+  const resolvedOnly = createDependentVerificationDebts(state.workspace, 'src/a.ts', 4, false)
+  assert.ok(!resolvedOnly.some(debt => debt.artifact.endsWith('src/b.ts')) || resolvedOnly.length === 0)
 })

@@ -24,4 +24,4 @@ export declare function updateAcceptanceAfterMutation(obligations: Iterable<Acce
 export declare function updateAcceptanceAfterObservation(obligations: Iterable<AcceptanceObligation>, path: string | undefined, relevant: boolean, evidence: string): string[];
 export declare function setArtifactDependencies(workspace: WorkspaceState, path: string, dependencies: Iterable<string>): void;
 export declare function dependentClosure(workspace: WorkspaceState, path: string, maxDepth?: number): string[];
-export declare function createDependentVerificationDebts(workspace: WorkspaceState, mutatedPath: string, sequence: number): VerificationDebt[];
+export declare function createDependentVerificationDebts(workspace: WorkspaceState, mutatedPath: string, sequence: number, conservative?: boolean): VerificationDebt[];

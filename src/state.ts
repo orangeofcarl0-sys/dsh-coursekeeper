@@ -68,6 +68,7 @@ export interface StateOptions extends GovernorPolicyConfig {
   benchmarkToolNames?: readonly string[]
   verificationToolNames?: readonly string[]
   verificationCommandPatterns?: readonly string[]
+  dependencyScope?: 'resolved' | 'conservative'
   finishToolNames?: readonly string[]
 }
 
@@ -81,6 +82,7 @@ export const DEFAULT_STATE_OPTIONS: StateOptions = {
   benchmarkScoreTolerancePercent: 2,
   benchmarkRequired: false,
   semanticVerifierMode: 'off',
+  dependencyScope: 'resolved',
 }
 
 function options(input: Partial<StateOptions> = {}): StateOptions {
@@ -464,13 +466,13 @@ export function registerToolCall(state: GovernorState, callId: string, name: str
   return semantics
 }
 
-function recordMutation(state: GovernorState, semantics: ToolSemantics, sequence: number): string[] {
+function recordMutation(state: GovernorState, semantics: ToolSemantics, sequence: number, conservative = false): string[] {
   const changedAcceptance: string[] = []
   if (semantics.artifacts.length > 0) {
     for (const artifact of semantics.artifacts) {
       state.knownArtifacts.add(artifact)
       createVerificationDebtForArtifact(state.workspace, artifact, sequence)
-      createDependentVerificationDebts(state.workspace, artifact, sequence)
+      createDependentVerificationDebts(state.workspace, artifact, sequence, conservative)
       if (state.episode && mutationIsRelevant(state, semantics)) {
         changedAcceptance.push(...updateAcceptanceAfterMutation(state.episode.acceptance.values(), artifact, `mutation:${semantics.name}:${artifact}`))
       }
@@ -605,7 +607,7 @@ export function settleToolCall(state: GovernorState, callId: string, result: Too
         ...(semantics.artifacts.length > 0 ? { artifacts: semantics.artifacts } : {}),
       }
     } else {
-      const acceptance = recordMutation(state, semantics, sequence)
+      const acceptance = recordMutation(state, semantics, sequence, options(inputOptions).dependencyScope === 'conservative')
       state.episode.phase = 'verify'
       event = {
         kind: acceptance.length > 0 ? 'acceptance-satisfied' : 'constraint-established',
