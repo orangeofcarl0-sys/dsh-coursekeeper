@@ -259,7 +259,7 @@ $DSH_HOME/coursekeeper/branch-experiences-v1.jsonl
 
 ## 14. 当前验证状态
 
-当前项目的本地发布基线通过 TypeScript 编译与 76 项控制逻辑测试，并对最终 npm tarball 做过反向解包 smoke test。它证明的是**控制逻辑和打包完整性**，不是 provider 侧任务质量提升。
+当前项目的本地发布基线通过 TypeScript 编译与 77 项控制逻辑测试，并对最终 npm tarball 做过反向解包 smoke test。它证明的是**控制逻辑和打包完整性**，不是 provider 侧任务质量提升。
 
 真实 DSH/provider 环境仍应做 shadow → active 的 A/B 验证，尤其关注：route failure、wrong-first-hypothesis recovery、uncached input、额外 verifier/challenger 调用和 false blocker。
 

@@ -22,3 +22,12 @@ test('session mode store persists latest mode per session and reloads', async ()
 
   await rm(dir, { recursive: true, force: true })
 })
+import { registerSessionHandle, getSessionHandle, unregisterSessionHandle } from '../lib/runtime-registry.js'
+
+test('runtime registry registers, reads, and unregisters session handles', () => {
+  const handle = { getMode: () => 'active', setMode: () => {}, getStatus: () => ({ ok: true }) }
+  registerSessionHandle('s-test', handle)
+  assert.equal(getSessionHandle('s-test'), handle)
+  unregisterSessionHandle('s-test')
+  assert.equal(getSessionHandle('s-test'), undefined)
+})
