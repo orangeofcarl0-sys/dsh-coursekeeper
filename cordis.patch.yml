@@ -4,6 +4,7 @@
       name: '@orangeofcarl0-sys/dsh-coursekeeper'
       config:
         mode: active
+        requireUserOptIn: true
         augmentationProfile: governor
         rolloutMode: single
         branchLearning: shadow

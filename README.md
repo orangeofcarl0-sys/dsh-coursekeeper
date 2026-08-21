@@ -38,6 +38,7 @@ Brancher      条件触发 fresh candidate，用证据 verifier 选择，再回�
 
 ```yaml
 mode: active
+requireUserOptIn: true
 augmentationProfile: governor
 rolloutMode: single
 capabilityControl: guard
@@ -50,7 +51,8 @@ safeExplorationRate: 0
 
 这意味着：
 
-- Coursekeeper 控制平面实际生效；
+- 默认需要用户在当前会话执行 `/coursekeeper on` 才生效；未开启时不会注入或阻塞；
+- 开启后 Coursekeeper 控制平面实际生效；
 - J-Space / Router Assist 默认关闭；
 - 工具 schema 尽量保持稳定，mutation 在执行时由 guard 拦截；
 - 自适应路由只做 shadow 建议，不改变确定性 route；
@@ -210,6 +212,8 @@ coursekeeper_status
 coursekeeper_semantic_verify
 coursekeeper_branch   # 仅 rolloutMode=verified-branching 且 exposeBranchTool=true
 ```
+
+用户入口：`/coursekeeper status|on|off|help`（host 命令，所有会话可见）。`status` 查看当前会话是否启用与 blockers；`on`/`off` 仅切换当前会话，不修改 profile 配置。默认 `requireUserOptIn: true`，未执行 `/coursekeeper on` 的会话不注入、不阻塞。
 
 `coursekeeper_control` 用于 commit / reroute / falsify / support / accept / waive；`coursekeeper_status` 是只读诊断；`coursekeeper_semantic_verify` 在确定性义务清理后运行独立语义验证；`coursekeeper_branch` 管理 Verified Branching wave/candidate/select/apply。
 

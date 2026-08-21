@@ -5,6 +5,7 @@
 - 语义验证器流式收集增加 finish 块兜底；空输出与不可解析输出分开记账（semantic-verifier/empty 与 unparseable），错误原因可归因。
 - parseSemanticVerifierResult 容忍 markdown code fence 与前后杂讯。
 - 新增 coursekeeperComparativeVerifier 可选宿主注入保护（verifierProtocolFor 与候选比较路径），coursekeeper_status 不再因未注入而崩溃。
+- 新增 `/coursekeeper` 用户命令与 `requireUserOptIn` 会话级 opt-in；bundle 默认 `requireUserOptIn: true`，未执行 `/coursekeeper on` 的会话不注入、不阻塞。
 - 本地控制测试扩展到 67 项。
 
 # 0.8.0 — Verified Branching

@@ -1,5 +1,17 @@
 # 工具与状态字段
 
+
+## 0. 用户入口 `/coursekeeper`
+
+Host 命令，所有会话可见，用于查看/开启/关闭当前会话的 Coursekeeper 管制：
+
+```text
+/coursekeeper status   查看当前会话是否启用、route/acceptance/verification/blockers
+/coursekeeper on       为当前会话启用（需 requireUserOptIn: true 时）
+/coursekeeper off      为当前会话关闭，后续不再注入或阻塞
+/coursekeeper help     显示用法
+```
+
 ## 1. `coursekeeper_control`
 
 用途：修改当前 Route Contract 或 Acceptance 状态。它是写操作。

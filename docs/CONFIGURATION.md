@@ -7,6 +7,7 @@
 | 字段 | 默认 | 说明 |
 |---|---:|---|
 | `mode` | `active` | `off` / `shadow` / `active`。控制整个插件是否干预。 |
+| `requireUserOptIn` | bundle 默认 `true` | 是否需要用户在当前会话执行 `/coursekeeper on` 后才启用；`false` 恢复对所有会话全局生效。 |
 | `rolloutMode` | `single` | `single` / `verified-branching`。默认不启用多 rollout。 |
 | `capabilityControl` | `guard` | `advisory` / `guard` / `restrict`。推荐 `guard`。 |
 | `adaptiveReasoning` | `off` | `off` / `episode` / `phase`。改变 provider reasoning effort，可能影响缓存形状。 |

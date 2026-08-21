@@ -25,6 +25,7 @@ export declare const name = "coursekeeper";
 export declare const inject: string[];
 export interface Config {
     mode?: GovernorMode;
+    requireUserOptIn?: boolean;
     rolloutMode?: RolloutMode;
     branchLearning?: BranchLearningMode;
     branchExperienceMemory?: boolean;
