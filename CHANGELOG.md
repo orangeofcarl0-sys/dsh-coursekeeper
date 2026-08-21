@@ -9,7 +9,10 @@
 - 新增 DSH 设置页 Coursekeeper 配置区（mode/requireUserOptIn/semanticVerifier/autoVerify/exposeStatusTool），提供用户级全局交互入口。
 - 新增 Web 会话标题栏 CK 按钮菜单：点击即可投递 `/coursekeeper status|on|off|help`。
 - 新增 per-session 三档模式：active 完整管制 / shadow 仅观察 / off 完全关闭；`/coursekeeper shadow` 与 CK 菜单同步支持。
-- 本地控制测试扩展到 67 项。
+- 实现 P0 语义验证韧性：新增 infraFailures / unavailable，`semanticVerifierFailOpen` 与 `/coursekeeper verifier allow|disallow` 审计出口。
+- 实现 P0 债务生命周期：ArtifactState.removed、删除操作识别、`cleanupVerificationDebts` 与 `/coursekeeper cleanup`。
+- 实现 P0 证据提取硬化：`extractPathLike` 过滤非文件 token，避免合成债务。
+- 本地控制测试扩展到 71 项。
 
 # 0.8.0 — Verified Branching
 

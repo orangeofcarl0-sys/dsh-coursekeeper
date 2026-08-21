@@ -54,7 +54,7 @@ tests/adaptive.test.mjs
 tests/branching.test.mjs
 ```
 
-当前 v0.8 发布基线累计 67 项测试。新增功能应优先增加控制不变量测试，而不是只测试字符串输出。
+当前 v0.8 发布基线累计 71 项测试。新增功能应优先增加控制不变量测试，而不是只测试字符串输出。
 
 ## 4. 当前非目标
 
@@ -112,7 +112,7 @@ branch lifecycle cleanup
 rolloutMode=single
 ```
 
-因此 v0.8 的 branching runtime 不会被调用。原 51 项测试全部保留，并新增 16 项 branching/control 与回归 test，目前本地合计 67 项通过。
+因此 v0.8 的 branching runtime 不会被调用。原 51 项测试全部保留，并新增 16 项 branching/control 与回归 test，目前本地合计 71 项通过。
 
 ## 未伪造的能力
 

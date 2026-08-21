@@ -6,6 +6,7 @@ import {
   controlPacket,
   createAcceptanceObligations,
   defaultRouteContract,
+  extractPathLike,
   lexicalSimilarity,
   mutationAllowed,
   parseBenchmarkResult,
@@ -91,4 +92,14 @@ test('benchmark identity includes dataset/hardware/spec dimensions', () => {
   const b = parseBenchmarkResult(JSON.stringify({benchmark_id:'idx',dataset:'B',hardware:'H100',total_queries:10000,recall:0.98,qps:1100,concurrency:8,warmup:100}))
   assert.ok(a && b)
   assert.equal(compareBenchmarkResults(b, a, 2).outcome, 'different-spec')
+})
+
+test('extractPathLike ignores non-file path-like tokens', () => {
+  const vals = extractPathLike('agent/pre-step session/event GovernorMode\n any\n 67/67 src/index.ts')
+  assert.ok(vals.includes('src/index.ts'))
+  assert.ok(!vals.includes('agent/pre-step'))
+  assert.ok(!vals.includes('session/event'))
+  assert.ok(!vals.includes('GovernorMode\n'))
+  assert.ok(!vals.includes('any\n'))
+  assert.ok(!vals.includes('67/67'))
 })

@@ -30,6 +30,9 @@ import {
   createDependentVerificationDebts,
   setArtifactDependencies,
   createWorkspaceMutationDebt,
+  markArtifactRemoved,
+  cleanupVerificationDebts,
+  waiveVerificationDebt,
   openAcceptance,
   openVerificationDebts,
   pruneVerificationDebts,
@@ -59,6 +62,8 @@ import type {
 
 export interface StateOptions extends GovernorPolicyConfig {
   semanticVerifierMode?: 'off' | 'risk' | 'always'
+  semanticVerifierFailOpen?: boolean
+  maxSemanticVerifierInfraFailures?: number
   benchmarkRequired?: boolean
   benchmarkToolNames?: readonly string[]
   verificationToolNames?: readonly string[]
@@ -68,6 +73,8 @@ export interface StateOptions extends GovernorPolicyConfig {
 export const DEFAULT_STATE_OPTIONS: StateOptions = {
   maxDynamicHintChars: 640,
   noInformationLimit: 3,
+  semanticVerifierFailOpen: false,
+  maxSemanticVerifierInfraFailures: 2,
   fullBenchmarkMinQueries: 10_000,
   fullBenchmarkMinRecall: 0.95,
   benchmarkScoreTolerancePercent: 2,
@@ -118,7 +125,7 @@ function benchmarkState() {
 
 function semanticVerificationState(contract: TaskContract, route: RouteContract, mode: 'off' | 'risk' | 'always' = 'off') {
   const required = contract.kind !== 'conversation' && (mode === 'always' || (mode === 'risk' && (contract.risk === 'high' || route.route === 'plan' || route.route === 'explore' || contract.kind === 'research')))
-  return { required, status: required ? 'pending' as const : 'not-required' as const, attempts: 0, contradictions: [], nextEvidence: [] }
+  return { required, status: required ? 'pending' as const : 'not-required' as const, attempts: 0, infraFailures: 0, contradictions: [], nextEvidence: [] }
 }
 
 function acceptanceMap(contract: TaskContract) {
@@ -344,7 +351,13 @@ export function completionBlockers(state: GovernorState, inputOptions: Partial<S
   const semantic = state.episode?.semanticVerification
   if (semantic?.required) {
     const current = semantic.verifiedWorkspaceRevision === state.workspace.revision
-    if (!current || semantic.status !== 'passed') blockers.push(`Independent semantic verification remains: ${semantic.status}.`)
+    if (!current || semantic.status !== 'passed') {
+      const cfg = options(inputOptions)
+      const infraExhausted = semantic.infraFailures >= (cfg.maxSemanticVerifierInfraFailures ?? 2)
+      const userAllowed = semantic.userAllowedInfraFail === true
+      const failOpen = cfg.semanticVerifierFailOpen === true && infraExhausted
+      if (!userAllowed && !failOpen) blockers.push(`Independent semantic verification remains: ${semantic.status}.`)
+    }
   }
   const branchWave = state.episode?.branching.current
   if (branchWave?.status === 'collecting' || branchWave?.status === 'comparing') blockers.push(`Verified branch wave ${branchWave.id} is still ${branchWave.status}; finish is blocked until it selects, aborts, or fails cleanly.`)
@@ -401,6 +414,8 @@ function progress(state: GovernorState, event: ProgressEvent): void {
   if (event.weight > 0) {
     if (episode.semanticVerification.required && episode.semanticVerification.status === 'passed') {
       episode.semanticVerification.status = 'pending'
+      episode.semanticVerification.infraFailures = 0
+      episode.semanticVerification.userAllowedInfraFail = undefined
       episode.semanticVerification.verifiedWorkspaceRevision = undefined
       episode.semanticVerification.decision = undefined
       episode.semanticVerification.reason = undefined
@@ -576,14 +591,27 @@ export function settleToolCall(state: GovernorState, callId: string, result: Too
       event = { kind: novel ? 'result-novel' : 'no-progress', sequence, weight: novel ? 0.1 : 0, summary: `observation did not satisfy current evidence target: ${semantics.name}` }
     }
   } else if (semantics.effect === 'mutate' || semantics.riskyMutation) {
-    const acceptance = recordMutation(state, semantics, sequence)
-    state.episode.phase = 'verify'
-    event = {
-      kind: acceptance.length > 0 ? 'acceptance-satisfied' : 'constraint-established',
-      sequence,
-      weight: acceptance.length > 0 ? 1 : 0.5,
-      summary: `workspace mutation via ${semantics.name}`,
-      ...(semantics.artifacts.length > 0 ? { artifacts: semantics.artifacts } : {}),
+    const removalOp = semantics.operation ?? ''
+    const removal = /(?:^|[;&|\s])(?:rm|rmdir|del|git\s+rm|git\s+clean)(?:\s|$)/i.test(removalOp)
+    if (removal && semantics.artifacts.length > 0) {
+      for (const artifact of semantics.artifacts) markArtifactRemoved(state.workspace, artifact, sequence)
+      event = {
+        kind: 'constraint-established',
+        sequence,
+        weight: 0.5,
+        summary: `workspace removal via ${semantics.name}`,
+        ...(semantics.artifacts.length > 0 ? { artifacts: semantics.artifacts } : {}),
+      }
+    } else {
+      const acceptance = recordMutation(state, semantics, sequence)
+      state.episode.phase = 'verify'
+      event = {
+        kind: acceptance.length > 0 ? 'acceptance-satisfied' : 'constraint-established',
+        sequence,
+        weight: acceptance.length > 0 ? 1 : 0.5,
+        summary: `workspace mutation via ${semantics.name}`,
+        ...(semantics.artifacts.length > 0 ? { artifacts: semantics.artifacts } : {}),
+      }
     }
   } else if (semantics.effect === 'verify') {
     const evidence = verificationEvidenceFromTool(semantics, sequence, state.workspace.revision, artifactRevisionSnapshot(state.workspace))

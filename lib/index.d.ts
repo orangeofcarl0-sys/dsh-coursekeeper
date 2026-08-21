@@ -62,6 +62,8 @@ export interface Config {
     semanticVerifierModel?: string;
     semanticVerifierMaxTokens?: number;
     maxSemanticVerifierCalls?: number;
+    semanticVerifierFailOpen?: boolean;
+    maxSemanticVerifierInfraFailures?: number;
     capabilityControl?: CapabilityControlMode;
     adaptiveReasoning?: AdaptiveReasoningMode | boolean;
     adaptiveRouting?: AdaptiveRoutingMode;

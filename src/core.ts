@@ -113,9 +113,23 @@ export function extractArtifacts(text: string): string[] {
   return unique(matches)
 }
 
+function looksLikeFilePath(value: string): boolean {
+  const text = String(value ?? '').trim()
+  if (!text) return false
+  if (/[\n\r\t]/.test(text)) return false
+  if (text.includes('\n')) return false
+  if (/^\d+\/\d+$/.test(text)) return false
+  const leaf = text.split(/[\/]/).pop() ?? ''
+  if (!/\.[A-Za-z0-9]{1,12}$/.test(leaf)) return false
+  return true
+}
+
 export function extractPathLike(text: string): string[] {
   const out = [...extractArtifacts(text)]
-  for (const match of text.matchAll(PATH_RE)) if (match[1]) out.push(match[1])
+  for (const match of text.matchAll(PATH_RE)) {
+    const value = match[1]
+    if (value && looksLikeFilePath(value)) out.push(value)
+  }
   return unique(out)
 }
 

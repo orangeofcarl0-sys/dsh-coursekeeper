@@ -25,6 +25,14 @@ export function mutateArtifact(workspace: WorkspaceState, path: string, sequence
   return state
 }
 
+export function markArtifactRemoved(workspace: WorkspaceState, path: string, sequence: number): ArtifactState {
+  const artifact = artifactState(workspace, path)
+  if (artifact.removed === true) return artifact
+  artifact.removed = true
+  artifact.removedAtSeq = sequence
+  return artifact
+}
+
 export function observeArtifact(workspace: WorkspaceState, path: string, sequence: number): ArtifactState {
   const state = artifactState(workspace, path)
   state.lastObservationSeq = sequence
@@ -77,14 +85,16 @@ export function debtSatisfied(workspace: WorkspaceState, debt: VerificationDebt)
   if (debt.artifact === '<workspace>' || debt.artifact === '<shell-mutation>') {
     return !debt.requiresCommand || (debt.commandRevision ?? -1) >= debt.workspaceRevision
   }
-  const current = artifactState(workspace, debt.artifact).revision
-    // A verification debt pins exactly one revision of one artifact. Once the
-    // artifact has advanced past that revision, the old debt can never be
-    // satisfied against the current content and no longer gates completion:
-    // the newer revision has (or will get) its own debt. Treat superseded
-    // debts as closed here; pruneVerificationDebts removes them from the set.
-    if (current > debt.artifactRevision) return true
-    if (current !== debt.artifactRevision) return false
+  const artifact = artifactState(workspace, debt.artifact)
+  if (artifact.removed === true) return true
+  const current = artifact.revision
+  // A verification debt pins exactly one revision of one artifact. Once the
+  // artifact has advanced past that revision, the old debt can never be
+  // satisfied against the current content and no longer gates completion:
+  // the newer revision has (or will get) its own debt. Treat superseded
+  // debts as closed here; pruneVerificationDebts removes them from the set.
+  if (current > debt.artifactRevision) return true
+  if (current !== debt.artifactRevision) return false
   const readback = !debt.requiresReadback || (debt.readbackRevision ?? -1) >= current
   const command = !debt.requiresCommand || (debt.commandRevision ?? -1) >= current
   return readback && command
@@ -98,6 +108,38 @@ export function pruneVerificationDebts(workspace: WorkspaceState): void {
   for (const [id, debt] of workspace.verificationDebt) {
     if (debtSatisfied(workspace, debt)) workspace.verificationDebt.delete(id)
   }
+}
+
+export function waiveVerificationDebt(workspace: WorkspaceState, debtId: string, reason: string): boolean {
+  const debt = workspace.verificationDebt.get(debtId)
+  if (!debt) return false
+  debt.waived = true
+  return true
+}
+
+function syntheticDebt(workspace: WorkspaceState, debt: VerificationDebt): boolean {
+  if (debt.artifact === '<workspace>' || debt.artifact === '<shell-mutation>') return false
+  const artifact = artifactState(workspace, debt.artifact)
+  if (artifact.removed === true) return false
+  const leaf = debt.artifact.split(/[\/]/).pop() ?? ''
+  return !/\.[A-Za-z0-9]{1,12}$/.test(leaf)
+}
+
+export function cleanupVerificationDebts(
+  workspace: WorkspaceState,
+  filter: { removed?: boolean; synthetic?: boolean; waived?: boolean } = {},
+): number {
+  let removed = 0
+  for (const [id, debt] of workspace.verificationDebt) {
+    const artifact = artifactState(workspace, debt.artifact)
+    const isRemoved = artifact.removed === true
+    const isWaived = debt.waived === true
+    const isSynthetic = syntheticDebt(workspace, debt)
+    if (filter.removed === true && isRemoved) { workspace.verificationDebt.delete(id); removed++; continue }
+    if (filter.synthetic === true && isSynthetic) { workspace.verificationDebt.delete(id); removed++; continue }
+    if (filter.waived === true && isWaived) { workspace.verificationDebt.delete(id); removed++; continue }
+  }
+  return removed
 }
 
 export function applyReadback(workspace: WorkspaceState, path: string): number {

@@ -1,6 +1,8 @@
 import type { GovernorPolicyConfig, GovernorState, ProgressEvent, Route, AdaptiveRouteDecision, RouteTransitionReason, ToolSemantics, BranchCandidate, BranchTriggerDecision, WorkspaceForkCapability } from './types.js';
 export interface StateOptions extends GovernorPolicyConfig {
     semanticVerifierMode?: 'off' | 'risk' | 'always';
+    semanticVerifierFailOpen?: boolean;
+    maxSemanticVerifierInfraFailures?: number;
     benchmarkRequired?: boolean;
     benchmarkToolNames?: readonly string[];
     verificationToolNames?: readonly string[];

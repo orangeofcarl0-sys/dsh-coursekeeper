@@ -11,7 +11,7 @@ import {
   registerToolCall,
   settleToolCall,
 } from '../lib/state.js'
-import { createVerificationDebtForArtifact, debtSatisfied, openVerificationDebts, pruneVerificationDebts } from '../lib/debt.js'
+import { createVerificationDebtForArtifact, debtSatisfied, markArtifactRemoved, openVerificationDebts, pruneVerificationDebts, cleanupVerificationDebts } from '../lib/debt.js'
 
 const opts = { maxDynamicHintChars: 640, noInformationLimit: 3, fullBenchmarkMinQueries: 10000, fullBenchmarkMinRecall: 0.95, benchmarkScoreTolerancePercent: 2 }
 
@@ -177,4 +177,36 @@ test('superseded revision debts no longer gate completion and are pruned', () =>
   assert.deepEqual(openVerificationDebts(state.workspace).map(debt => debt.id), [d3.id])
   pruneVerificationDebts(state.workspace)
   assert.deepEqual([...state.workspace.verificationDebt.keys()], [d3.id])
+})
+
+test('removed artifact debts no longer block completion and are pruned', () => {
+  const state = createGovernorState()
+  acceptHumanTask(state, 'Create src/a.ts', 1, false, opts)
+  const debt = createVerificationDebtForArtifact(state.workspace, 'src/a.ts', 2)
+  assert.equal(openVerificationDebts(state.workspace).length, 1)
+  markArtifactRemoved(state.workspace, 'src/a.ts', 3)
+  assert.equal(openVerificationDebts(state.workspace).length, 0)
+  pruneVerificationDebts(state.workspace)
+  assert.equal(state.workspace.verificationDebt.size, 0)
+  assert.equal(debt.id.length > 0, true)
+})
+
+test('cleanupVerificationDebts removes synthetic debts', () => {
+  const state = createGovernorState()
+  createVerificationDebtForArtifact(state.workspace, 'agent/pre-step', 1)
+  assert.equal(cleanupVerificationDebts(state.workspace, { synthetic: true }), 1)
+  assert.equal(state.workspace.verificationDebt.size, 0)
+})
+
+test('semantic infra-fail user escape removes semantic blocker', () => {
+  const state = createGovernorState()
+  const riskOpts = { ...opts, semanticVerifierMode: 'risk', semanticVerifierFailOpen: false, maxSemanticVerifierInfraFailures: 2 }
+  acceptHumanTask(state, '研究未知机制并设计实验', 1, false, riskOpts)
+  state.episode.acceptance.forEach(x => { x.status = 'satisfied' })
+  state.episode.route.explicit = true
+  state.episode.semanticVerification.status = 'unavailable'
+  state.episode.semanticVerification.infraFailures = 2
+  assert.ok(completionBlockers(state, riskOpts).some(x => x.includes('Independent semantic verification')))
+  state.episode.semanticVerification.userAllowedInfraFail = true
+  assert.ok(!completionBlockers(state, riskOpts).some(x => x.includes('Independent semantic verification')))
 })

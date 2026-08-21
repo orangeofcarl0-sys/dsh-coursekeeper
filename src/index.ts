@@ -59,6 +59,7 @@ import {
   recordNoValidBranchCandidate,
   reopenAfterBranchApply,
 } from './state.js'
+import { cleanupVerificationDebts } from './debt.js'
 import type {
   AdaptiveReasoningMode,
   AugmentationProfile,
@@ -177,6 +178,8 @@ export interface Config {
   semanticVerifierModel?: string
   semanticVerifierMaxTokens?: number
   maxSemanticVerifierCalls?: number
+  semanticVerifierFailOpen?: boolean
+  maxSemanticVerifierInfraFailures?: number
   capabilityControl?: CapabilityControlMode
   adaptiveReasoning?: AdaptiveReasoningMode | boolean
   adaptiveRouting?: AdaptiveRoutingMode
@@ -261,6 +264,8 @@ export const Config: any = z.object({
   semanticVerifierModel: z.string(),
   semanticVerifierMaxTokens: z.natural().min(128).default(1536),
   maxSemanticVerifierCalls: z.natural().min(1).default(2),
+  semanticVerifierFailOpen: z.boolean().default(false),
+  maxSemanticVerifierInfraFailures: z.natural().min(1).default(2),
   capabilityControl: z.union(['advisory', 'guard', 'restrict'] as const).default('guard'),
   adaptiveReasoning: z.union(['off', 'episode', 'phase'] as const).default('off'),
   adaptiveRouting: z.union(['off', 'shadow', 'active'] as const).default('shadow'),
@@ -345,6 +350,8 @@ interface ResolvedConfig {
   semanticVerifierModel?: string
   semanticVerifierMaxTokens: number
   maxSemanticVerifierCalls: number
+  semanticVerifierFailOpen: boolean
+  maxSemanticVerifierInfraFailures: number
   capabilityControl: CapabilityControlMode
   adaptiveReasoning: AdaptiveReasoningMode
   adaptiveRouting: AdaptiveRoutingMode
@@ -438,6 +445,8 @@ function resolvedConfig(input: Config): ResolvedConfig {
     ...(input.semanticVerifierModel ? { semanticVerifierModel: input.semanticVerifierModel } : {}),
     semanticVerifierMaxTokens: input.semanticVerifierMaxTokens ?? 1536,
     maxSemanticVerifierCalls: input.maxSemanticVerifierCalls ?? 2,
+    semanticVerifierFailOpen: input.semanticVerifierFailOpen ?? false,
+    maxSemanticVerifierInfraFailures: input.maxSemanticVerifierInfraFailures ?? 2,
     capabilityControl: input.capabilityControl ?? 'guard',
     adaptiveReasoning: nativeCanonical ? 'off' : adaptive,
     adaptiveRouting: input.adaptiveRouting ?? 'shadow',
@@ -638,6 +647,8 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
     verificationToolNames: config.verificationToolNames,
     finishToolNames: config.finishToolNames,
     semanticVerifierMode: config.semanticVerifier,
+    semanticVerifierFailOpen: config.semanticVerifierFailOpen,
+    maxSemanticVerifierInfraFailures: config.maxSemanticVerifierInfraFailures,
   })
 
   const sessionEnabled = (agent: any): boolean => {
@@ -1299,13 +1310,15 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
     if (semantic.status === 'passed' && semantic.verifiedWorkspaceRevision === state.workspace.revision) return true
     if (runtime.semanticVerifierInFlight) return false
     if (semantic.attempts >= config.maxSemanticVerifierCalls) return false
+    if (semantic.infraFailures >= config.maxSemanticVerifierInfraFailures) return false
     const packet = buildEvidencePacket(state)
     if (!packet) return false
     const provider = config.semanticVerifierProvider ?? runtime.lastProvider ?? runtime.agent?.options?.provider
     const model = config.semanticVerifierModel ?? runtime.lastModel ?? runtime.agent?.options?.model
     if (!provider || !model) {
-      semantic.status = 'unknown'
+      semantic.status = 'unavailable'
       semantic.reason = 'semantic verifier route unavailable: no provider/model has been observed'
+      semantic.infraFailures++
       semantic.attempts++
       refreshPolicyHint(state, stateOptions())
       return false
@@ -1341,8 +1354,9 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
         }
       }
       if (!text.trim()) {
-        semantic.status = 'unknown'
+        semantic.status = 'unavailable'
         semantic.reason = 'semantic verifier returned empty output (provider stream emitted no text)'
+        semantic.infraFailures++
         semantic.attempts++
         semantic.verifiedWorkspaceRevision = state.workspace.revision
         ledger.record({ event: 'semantic-verifier/empty', sessionId: runtime.agent?.id, episode: episode.id, provider, model, outputHash: fingerprint(text) })
@@ -1351,8 +1365,9 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
       }
       const result = parseSemanticVerifierResult(text)
       if (!result) {
-        semantic.status = 'unknown'
+        semantic.status = 'unavailable'
         semantic.reason = 'semantic verifier returned unparseable output'
+        semantic.infraFailures++
         semantic.attempts++
         semantic.verifiedWorkspaceRevision = state.workspace.revision
         ledger.record({ event: 'semantic-verifier/unparseable', sessionId: runtime.agent?.id, episode: episode.id, provider, model, outputHash: fingerprint(text) })
@@ -1384,8 +1399,9 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
       if (result.decision === 'fail_route' || result.decision === 'unknown') void maybeAutoBranch(runtime, signal)
       return result.decision === 'pass'
     } catch (error) {
-      semantic.status = 'unknown'
+      semantic.status = 'unavailable'
       semantic.reason = error instanceof Error ? error.message : String(error)
+      semantic.infraFailures++
       semantic.attempts++
       semantic.verifiedWorkspaceRevision = state.workspace.revision
       refreshPolicyHint(state, stateOptions())
@@ -1976,7 +1992,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
     ctx.commands.register({
       name: 'coursekeeper',
       description: '查看/开启/关闭当前会话的 Coursekeeper 管制',
-      input: { hint: '[status|on|off|shadow|help]' },
+      input: { hint: '[status|on|off|shadow|verifier allow|cleanup|help]' },
       handler: (invocation: any) => {
         const agent = invocation?.agent
         if (!agent) return { kind: 'error', text: 'coursekeeper: no owning agent' }
@@ -1994,13 +2010,31 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
           setSessionMode(agent, 'off')
           return { kind: 'success', text: 'coursekeeper: disabled for this session; no further injection or blocking.' }
         }
+        if (sub === 'verifier') {
+          const runtime = stateFor(agent)
+          const semantic = runtime.governor.episode?.semanticVerification
+          const rest = raw.split(/\s+/).slice(1)[0] ?? ''
+          if (semantic && (rest === 'allow' || rest === 'disallow')) {
+            semantic.userAllowedInfraFail = rest === 'allow'
+            return { kind: 'success', text: rest === 'allow' ? 'semantic verifier infra-fail escape enabled for this episode (audited)' : 'semantic verifier infra-fail escape disabled' }
+          }
+          return { kind: 'error', text: 'coursekeeper verifier requires allow|disallow' }
+        }
+        if (sub === 'cleanup') {
+          const runtime = stateFor(agent)
+          const count = cleanupVerificationDebts(runtime.governor.workspace, { removed: true, synthetic: true })
+          return { kind: 'success', text: 'coursekeeper cleaned ' + count + ' obsolete verification debt(s)' }
+        }
         if (sub === 'help') {
           const lines = [
-            'coursekeeper [status|on|off|shadow|help]',
-            '  status  show this session state and blockers',
-            '  on      enable full control for this session only',
-            '  shadow  observe only: record status, no injection or blocking',
-            '  off     disable coursekeeper for this session only',
+            'coursekeeper [status|on|off|shadow|verifier allow|cleanup|help]',
+            '  status        show this session state and blockers',
+            '  on            enable full control for this session only',
+            '  shadow        observe only: record status, no injection or blocking',
+            '  off           disable coursekeeper for this session only',
+            '  verifier allow  allow finish after semantic verifier infra failures (audited)',
+            '  verifier disallow  reset that escape',
+            '  cleanup       remove removed/synthetic/waived verification debts',
           ]
           return { kind: 'success', text: lines.join(String.fromCharCode(10)) }
         }
@@ -2010,11 +2044,13 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
         const enabled = runtimeMode !== 'off'
         const controlled = runtimeMode === 'active'
         const blockers = completionBlockers(state, stateOptions())
+        const sem = state.episode?.semanticVerification
         const lines = [
           'coursekeeper: ' + (enabled ? (controlled ? 'active' : 'shadow') : 'disabled') + ' for this session',
           'mode=' + runtimeMode + ' (global=' + config.mode + ') requireUserOptIn=' + config.requireUserOptIn,
           'route=' + (state.episode?.route.route ?? '-') + ' phase=' + (state.episode?.phase ?? '-'),
           'acceptance=' + (state.episode ? openAcceptanceCount(state) : 0) + ' verification=' + openVerificationCount(state),
+          'semantic=' + (sem ? sem.status + ' infra=' + sem.infraFailures + (sem.userAllowedInfraFail ? ' userAllowed' : '') : 'not-required'),
           blockers.length ? 'blockers:' : 'blockers: none',
           ...blockers.map(blocker => '- ' + blocker),
         ]

@@ -1,6 +1,7 @@
 import type { AcceptanceObligation, ArtifactState, VerificationDebt, VerificationEvidence, WorkspaceState } from './types.js';
 export declare function artifactState(workspace: WorkspaceState, path: string): ArtifactState;
 export declare function mutateArtifact(workspace: WorkspaceState, path: string, sequence: number): ArtifactState;
+export declare function markArtifactRemoved(workspace: WorkspaceState, path: string, sequence: number): ArtifactState;
 export declare function observeArtifact(workspace: WorkspaceState, path: string, sequence: number): ArtifactState;
 export declare function artifactRevisionSnapshot(workspace: WorkspaceState): Record<string, number>;
 export declare function createVerificationDebtForArtifact(workspace: WorkspaceState, path: string, sequence: number): VerificationDebt;
@@ -8,6 +9,12 @@ export declare function createWorkspaceMutationDebt(workspace: WorkspaceState, s
 export declare function debtSatisfied(workspace: WorkspaceState, debt: VerificationDebt): boolean;
 export declare function openVerificationDebts(workspace: WorkspaceState): VerificationDebt[];
 export declare function pruneVerificationDebts(workspace: WorkspaceState): void;
+export declare function waiveVerificationDebt(workspace: WorkspaceState, debtId: string, reason: string): boolean;
+export declare function cleanupVerificationDebts(workspace: WorkspaceState, filter?: {
+    removed?: boolean;
+    synthetic?: boolean;
+    waived?: boolean;
+}): number;
 export declare function applyReadback(workspace: WorkspaceState, path: string): number;
 export declare function applyVerificationEvidence(workspace: WorkspaceState, evidence: VerificationEvidence): number;
 export declare function openAcceptance(obligations: Iterable<AcceptanceObligation>): AcceptanceObligation[];

@@ -22,7 +22,7 @@ export type BranchStatus = 'idle' | 'suggested' | 'collecting' | 'comparing' | '
 export type WorkspaceForkCapability = 'none' | 'restart' | 'pre-mutation' | 'arbitrary'
 export type BranchCandidateOrigin = 'current' | 'fresh' | 'route-alternate' | 'external'
 export type ComparativeVerifierDecision = 'a' | 'b' | 'tie' | 'no_valid_candidate'
-export type SemanticVerificationStatus = 'not-required' | 'pending' | 'running' | 'passed' | 'warn' | 'failed' | 'unknown'
+export type SemanticVerificationStatus = 'not-required' | 'pending' | 'running' | 'passed' | 'warn' | 'failed' | 'unknown' | 'unavailable'
 export type ProgressKind =
   | 'new-artifact-observed'
   | 'hypothesis-supported'
@@ -332,6 +332,8 @@ export interface ArtifactState {
   revision: number
   lastMutationSeq?: number
   lastObservationSeq?: number
+  removed?: boolean
+  removedAtSeq?: number
   dependencies: Set<string>
   dependents: Set<string>
 }
@@ -420,6 +422,8 @@ export interface SemanticVerificationState {
   required: boolean
   status: SemanticVerificationStatus
   attempts: number
+  infraFailures: number
+  userAllowedInfraFail?: boolean
   verifiedWorkspaceRevision?: number
   decision?: 'pass' | 'warn' | 'patch' | 'fail_route' | 'unknown'
   reason?: string
