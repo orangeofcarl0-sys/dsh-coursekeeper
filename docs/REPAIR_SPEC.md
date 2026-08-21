@@ -1,6 +1,6 @@
 # Coursekeeper 修复规范（Repair Spec）
 
-> 状态：Draft  
+> 状态：Implemented（全部 Spec 已落地，见 CHANGELOG）  
 > 版本：0.1  
 > 范围：v0.8 已知系统限制的修复设计  
 > 目标读者：Coursekeeper 维护者、DSH 宿主集成方、测试与运维  
