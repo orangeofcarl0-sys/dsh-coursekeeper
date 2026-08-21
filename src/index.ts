@@ -60,6 +60,7 @@ import {
   reopenAfterBranchApply,
 } from './state.js'
 import { cleanupVerificationDebts } from './debt.js'
+import { LocalWorkspaceForkProvider, LocalBranchExecutor } from './workspace-fork-local.js'
 import type {
   AdaptiveReasoningMode,
   AugmentationProfile,
@@ -168,6 +169,11 @@ export interface Config {
   maxComparativeVerifierCalls?: number
   comparativeVerifierCriteria?: string[]
   exposeBranchTool?: boolean
+  branchLocalForkEnabled?: boolean
+  branchLocalWorkspaceRoot?: string
+  branchLocalWorkspaceRefRoot?: string
+  branchLocalCommand?: string[]
+  branchLocalTimeoutMs?: number
   crossProtocolWeight?: number
   crossRolloutWeight?: number
   augmentationProfile?: AugmentationProfile
@@ -254,6 +260,11 @@ export const Config: any = z.object({
   maxComparativeVerifierCalls: z.natural().min(1).default(8),
   comparativeVerifierCriteria: z.array(z.string()).default(['acceptance', 'evidence', 'errors']),
   exposeBranchTool: z.boolean().default(false),
+  branchLocalForkEnabled: z.boolean().default(false),
+  branchLocalWorkspaceRoot: z.string(),
+  branchLocalWorkspaceRefRoot: z.string(),
+  branchLocalCommand: z.array(z.string()).default([]),
+  branchLocalTimeoutMs: z.natural().min(1000).default(120000),
   crossProtocolWeight: z.number().min(0).max(1).default(0),
   crossRolloutWeight: z.number().min(0).max(1).default(0.25),
   augmentationProfile: z.union(['governor', 'jspace-assist', 'router-assist', 'hybrid-assist', 'native-canonical'] as const).default('governor'),
@@ -340,6 +351,11 @@ interface ResolvedConfig {
   maxComparativeVerifierCalls: number
   comparativeVerifierCriteria: string[]
   exposeBranchTool: boolean
+  branchLocalForkEnabled: boolean
+  branchLocalWorkspaceRoot?: string
+  branchLocalWorkspaceRefRoot?: string
+  branchLocalCommand: string[]
+  branchLocalTimeoutMs: number
   crossProtocolWeight: number
   crossRolloutWeight: number
   augmentationProfile: AugmentationProfile
@@ -435,6 +451,11 @@ function resolvedConfig(input: Config): ResolvedConfig {
     maxComparativeVerifierCalls: input.maxComparativeVerifierCalls ?? 8,
     comparativeVerifierCriteria: input.comparativeVerifierCriteria ?? ['acceptance', 'evidence', 'errors'],
     exposeBranchTool: input.exposeBranchTool ?? ((input.rolloutMode ?? 'single') === 'verified-branching'),
+    branchLocalForkEnabled: input.branchLocalForkEnabled ?? false,
+    ...(input.branchLocalWorkspaceRoot ? { branchLocalWorkspaceRoot: input.branchLocalWorkspaceRoot } : {}),
+    ...(input.branchLocalWorkspaceRefRoot ? { branchLocalWorkspaceRefRoot: input.branchLocalWorkspaceRefRoot } : {}),
+    branchLocalCommand: input.branchLocalCommand ?? [],
+    branchLocalTimeoutMs: input.branchLocalTimeoutMs ?? 120000,
     crossProtocolWeight: input.crossProtocolWeight ?? 0,
     crossRolloutWeight: input.crossRolloutWeight ?? 0.25,
     augmentationProfile: profile,
@@ -834,6 +855,19 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
     }
     if (candidate?.workspace?.checkpoint && candidate?.workspace?.fork && candidate?.workspace?.apply && candidate?.executor?.execute) {
       runtime.branchRuntime = candidate as BranchRuntimeProvider
+      return runtime.branchRuntime
+    }
+    if (config.branchLocalForkEnabled && config.branchLocalWorkspaceRoot) {
+      const localOptions = {
+        root: config.branchLocalWorkspaceRoot,
+        ...(config.branchLocalWorkspaceRefRoot ? { workspaceRefRoot: config.branchLocalWorkspaceRefRoot } : {}),
+        command: config.branchLocalCommand,
+        timeoutMs: config.branchLocalTimeoutMs,
+      }
+      runtime.branchRuntime = {
+        workspace: new LocalWorkspaceForkProvider(localOptions),
+        executor: new LocalBranchExecutor(localOptions),
+      }
       return runtime.branchRuntime
     }
     return undefined

@@ -12,7 +12,8 @@
 - 实现 P0 语义验证韧性：新增 infraFailures / unavailable，`semanticVerifierFailOpen` 与 `/coursekeeper verifier allow|disallow` 审计出口。
 - 实现 P0 债务生命周期：ArtifactState.removed、删除操作识别、`cleanupVerificationDebts` 与 `/coursekeeper cleanup`。
 - 实现 P0 证据提取硬化：`extractPathLike` 过滤非文件 token，避免合成债务。
-- 本地控制测试扩展到 71 项。
+- 实现 BR-001 本地 WorkspaceForkProvider / BranchExecutor（branchLocalForkEnabled / branchLocalWorkspaceRoot / branchLocalCommand），可配置启用本地文件复制候选隔离与命令执行。
+- 本地控制测试扩展到 73 项。
 
 # 0.8.0 — Verified Branching
 

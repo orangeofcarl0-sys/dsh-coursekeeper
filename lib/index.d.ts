@@ -52,6 +52,11 @@ export interface Config {
     maxComparativeVerifierCalls?: number;
     comparativeVerifierCriteria?: string[];
     exposeBranchTool?: boolean;
+    branchLocalForkEnabled?: boolean;
+    branchLocalWorkspaceRoot?: string;
+    branchLocalWorkspaceRefRoot?: string;
+    branchLocalCommand?: string[];
+    branchLocalTimeoutMs?: number;
     crossProtocolWeight?: number;
     crossRolloutWeight?: number;
     augmentationProfile?: AugmentationProfile;

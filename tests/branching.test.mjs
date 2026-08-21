@@ -23,6 +23,7 @@ import {
   trajectoryContaminationScore,
 } from '../lib/branching.js'
 import { BranchExperienceStore } from '../lib/branching-store.js'
+import { LocalWorkspaceForkProvider, LocalBranchExecutor } from '../lib/workspace-fork-local.js'
 import { buildTaskSignature } from '../lib/adaptive/index.js'
 import {
   acceptHumanTask,
@@ -277,4 +278,25 @@ test('an active collecting branch wave is itself a completion blocker', () => {
   startBranchWave(state, decision, 'none')
   const blockers = completionBlockers(state, stateOpts)
   assert.ok(blockers.some(x => /branch wave .*collecting/i.test(x)))
+})
+
+test('local fork provider copies workspace and disposes', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ck-local-'))
+  await writeFile(join(root, 'a.txt'), 'hello')
+  const provider = new LocalWorkspaceForkProvider({ root })
+  const checkpoint = await provider.checkpoint()
+  const fork = await provider.fork(checkpoint, 'cand-1')
+  assert.equal(await readFile(join(fork.workspaceRef, 'a.txt'), 'utf8'), 'hello')
+  await provider.dispose(fork.workspaceRef)
+  await rm(root, { recursive: true, force: true })
+})
+
+test('local branch executor runs configured command', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ck-exec-'))
+  await writeFile(join(root, 'a.txt'), 'x')
+  const command = process.platform === 'win32' ? ['cmd.exe', '/c', 'echo ok'] : ['sh', '-c', 'echo ok']
+  const executor = new LocalBranchExecutor({ root, command })
+  const result = await executor.execute({ candidateId: 'c1', workspaceRef: root, objective: 'test', freshContext: true, includeGeneratorReasoning: false })
+  assert.ok(result.evidence.outputs.join('\n').includes('ok'))
+  await rm(root, { recursive: true, force: true })
 })

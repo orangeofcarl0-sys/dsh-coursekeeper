@@ -18,4 +18,8 @@ declare const Buffer: any
 declare module 'node:crypto' { export const createHash: any }
 declare module 'node:os' { export const homedir: any }
 declare module 'node:path' { export const join: any; export const dirname: any }
-declare module 'node:fs/promises' { export const appendFile: any; export const mkdir: any; export const rename: any; export const stat: any; export const readFile: any }
+declare module 'node:fs/promises' { export const appendFile: any; export const mkdir: any; export const rename: any; export const stat: any; export const readFile: any; export const rm: any; export const cp: any }
+
+declare module 'node:os' { export const homedir: any; export const tmpdir: any }
+declare module 'node:child_process' { export const execFile: any }
+declare module 'node:util' { export const promisify: any }
