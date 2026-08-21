@@ -57,6 +57,9 @@ export interface Config {
     branchLocalWorkspaceRefRoot?: string;
     branchLocalCommand?: string[];
     branchLocalTimeoutMs?: number;
+    sessionModeMemory?: boolean;
+    sessionModePath?: string;
+    sessionModeMaxEntries?: number;
     crossProtocolWeight?: number;
     crossRolloutWeight?: number;
     augmentationProfile?: AugmentationProfile;

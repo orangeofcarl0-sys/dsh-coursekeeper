@@ -13,7 +13,8 @@
 - 实现 P0 债务生命周期：ArtifactState.removed、删除操作识别、`cleanupVerificationDebts` 与 `/coursekeeper cleanup`。
 - 实现 P0 证据提取硬化：`extractPathLike` 过滤非文件 token，避免合成债务。
 - 实现 BR-001 本地 WorkspaceForkProvider / BranchExecutor（branchLocalForkEnabled / branchLocalWorkspaceRoot / branchLocalCommand），可配置启用本地文件复制候选隔离与命令执行。
-- 本地控制测试扩展到 73 项。
+- 实现 UX-001 子集：per-session 模式持久化（SessionModeStore），CK 菜单新增 verifier allow / cleanup 操作。
+- 本地控制测试扩展到 74 项。
 
 # 0.8.0 — Verified Branching
 

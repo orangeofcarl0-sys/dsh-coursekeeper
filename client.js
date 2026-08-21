@@ -58,6 +58,8 @@ window.__ModuleLoader__.load({
           item('启用本会话', '/coursekeeper on'),
           item('关闭本会话', '/coursekeeper off'),
           item('仅观察（不拦截）', '/coursekeeper shadow'),
+          item('允许跳过硬语义验证', '/coursekeeper verifier allow'),
+          item('清理过期债务', '/coursekeeper cleanup'),
           item('帮助', '/coursekeeper help'),
           react.createElement('div', { style: styles.hint }, '点击会将命令投递到当前会话'),
         ) : null,

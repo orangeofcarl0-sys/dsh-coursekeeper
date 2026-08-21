@@ -61,6 +61,7 @@ import {
 } from './state.js'
 import { cleanupVerificationDebts } from './debt.js'
 import { LocalWorkspaceForkProvider, LocalBranchExecutor } from './workspace-fork-local.js'
+import { SessionModeStore } from './session-mode-store.js'
 import type {
   AdaptiveReasoningMode,
   AugmentationProfile,
@@ -174,6 +175,9 @@ export interface Config {
   branchLocalWorkspaceRefRoot?: string
   branchLocalCommand?: string[]
   branchLocalTimeoutMs?: number
+  sessionModeMemory?: boolean
+  sessionModePath?: string
+  sessionModeMaxEntries?: number
   crossProtocolWeight?: number
   crossRolloutWeight?: number
   augmentationProfile?: AugmentationProfile
@@ -265,6 +269,9 @@ export const Config: any = z.object({
   branchLocalWorkspaceRefRoot: z.string(),
   branchLocalCommand: z.array(z.string()).default([]),
   branchLocalTimeoutMs: z.natural().min(1000).default(120000),
+  sessionModeMemory: z.boolean().default(true),
+  sessionModePath: z.string(),
+  sessionModeMaxEntries: z.natural().min(16).default(2000),
   crossProtocolWeight: z.number().min(0).max(1).default(0),
   crossRolloutWeight: z.number().min(0).max(1).default(0.25),
   augmentationProfile: z.union(['governor', 'jspace-assist', 'router-assist', 'hybrid-assist', 'native-canonical'] as const).default('governor'),
@@ -356,6 +363,9 @@ interface ResolvedConfig {
   branchLocalWorkspaceRefRoot?: string
   branchLocalCommand: string[]
   branchLocalTimeoutMs: number
+  sessionModeMemory: boolean
+  sessionModePath: string
+  sessionModeMaxEntries: number
   crossProtocolWeight: number
   crossRolloutWeight: number
   augmentationProfile: AugmentationProfile
@@ -456,6 +466,9 @@ function resolvedConfig(input: Config): ResolvedConfig {
     ...(input.branchLocalWorkspaceRefRoot ? { branchLocalWorkspaceRefRoot: input.branchLocalWorkspaceRefRoot } : {}),
     branchLocalCommand: input.branchLocalCommand ?? [],
     branchLocalTimeoutMs: input.branchLocalTimeoutMs ?? 120000,
+    sessionModeMemory: input.sessionModeMemory ?? true,
+    sessionModePath: input.sessionModePath ?? join(dshHome, 'coursekeeper', 'session-modes-v1.jsonl'),
+    sessionModeMaxEntries: input.sessionModeMaxEntries ?? 2000,
     crossProtocolWeight: input.crossProtocolWeight ?? 0,
     crossRolloutWeight: input.crossRolloutWeight ?? 0.25,
     augmentationProfile: profile,
@@ -644,8 +657,10 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
   const ledger = new DecisionLedger({ enabled: config.ledger, path: config.ledgerPath, maxBytes: config.maxLedgerBytes })
   const experienceStore = new ExperienceStore({ enabled: config.experienceMemory, path: config.experiencePath, maxInMemory: config.experienceMaxEntries })
   const branchExperienceStore = new BranchExperienceStore({ enabled: config.branchExperienceMemory, path: config.branchExperiencePath, maxInMemory: config.branchExperienceMaxEntries })
+  const sessionModeStore = new SessionModeStore({ enabled: config.sessionModeMemory, path: config.sessionModePath, maxInMemory: config.sessionModeMaxEntries })
   void experienceStore.ready()
   void branchExperienceStore.ready()
+  void sessionModeStore.ready()
 
   try {
     ctx.inject(['settings'], (settingsCtx: any) => {
@@ -688,6 +703,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
     const runtime = stateFor(agent)
     if (runtime.userMode === mode) return runtime
     runtime.userMode = mode
+    sessionModeStore.set(String(agent?.session?.id ?? agent?.id ?? ''), mode)
     if (mode === 'active') {
       installGuard(runtime)
       refreshRestriction(runtime)
@@ -713,7 +729,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
       ? rebuildStateFromEvents(agent.session.events, stateOptions())
       : createGovernorState()
     runtime = {
-      agent, governor, userMode: config.requireUserOptIn ? 'off' : config.mode, restrictionDenied: [], effortOverrideApplied: false, semanticVerifierInFlight: false,
+      agent, governor, userMode: sessionModeStore.get(String(agent?.session?.id ?? agent?.id ?? '')) ?? (config.requireUserOptIn ? 'off' : config.mode), restrictionDenied: [], effortOverrideApplied: false, semanticVerifierInFlight: false,
       metrics: newEpisodeMetrics(), externalFailure: false, routeChallengeCount: 0, branchVerifierInFlight: false, suppressedVisiblePolicies: 0,
     }
     runtimeStates.set(agent, runtime)
@@ -2000,6 +2016,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
           calibrationDomain: runtime.calibrationDomain ?? null,
           experienceStore: experience,
           branchExperienceStore: await branchExperienceStore.status(),
+          sessionModeStore: await sessionModeStore.status(),
           phase: state.episode?.phase ?? null,
           risk: state.episode?.contract.risk ?? null,
           vector: state.episode?.contract.vector ?? null,
@@ -2103,6 +2120,7 @@ export function apply(ctx: Context, inputConfig: Config = {}): void {
     runtimeStates.clear()
     await experienceStore.close()
     await branchExperienceStore.close()
+    await sessionModeStore.close()
     await ledger.close()
   }, 'coursekeeper.lifecycle')
 
