@@ -66,6 +66,15 @@ window.__ModuleLoader__.load({
       );
     }
 
+    function SettingsPanel() {
+      return react.createElement('div', { style: { padding: 12, fontSize: 13, lineHeight: 1.8, color: '#d8dbe8' } },
+        react.createElement('div', { style: { fontWeight: 600, marginBottom: 8 } }, 'Coursekeeper 控制'),
+        react.createElement('div', null, '默认 requireUserOptIn=true，新会话默认不触发。'),
+        react.createElement('div', null, '会话标题栏的 CK 按钮可切换 off / shadow / active，并执行 verifier allow / cleanup。'),
+        react.createElement('div', null, '命令：/coursekeeper status|on|shadow|off|verifier allow|cleanup|help'),
+      );
+    }
+
     exports.inject = ['slots'];
     exports.apply = function apply(ctx) {
       ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
@@ -74,6 +83,12 @@ window.__ModuleLoader__.load({
         order: 100,
         label: 'Coursekeeper',
       }, CoursekeeperAction));
+      ctx.slots.inject('settings.section', () => ctx.slots.register({
+        name: 'settings.section',
+        id: 'coursekeeper',
+        order: 100,
+        label: () => 'Coursekeeper',
+      }, SettingsPanel));
     };
     return module.exports;
   },
